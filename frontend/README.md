@@ -88,3 +88,38 @@ npm run preview
 [.env.example](.env.example) містить запропоновану VITE_API_BASE_URL.
 Завантаження цієї змінної в API-клієнті ще потрібно реалізувати.
 Секрети не можна зберігати в VITE_* або public/.
+
+## Довідка Vite та налаштування інструментів
+
+Початковий frontend створено на основі шаблону React + TypeScript + Vite.
+Vite забезпечує локальний сервер розробки зі швидким оновленням
+інтерфейсу та збірку для публікації.
+
+### Плагіни React
+
+У поточній конфігурації використовується @vitejs/plugin-react.
+Альтернативний плагін @vitejs/plugin-react-swc використовує SWC.
+Це альтернативи; встановлювати обидва не потрібно.
+
+- [Документація @vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react)
+- [Документація @vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react-swc)
+
+### React Compiler
+
+У початковому каркасі React Compiler не увімкнено.
+Його підключення можна розглянути окремо за потреби.
+
+[Документація React Compiler](https://react.dev/learn/react-compiler/installation)
+
+### Подальше розширення ESLint
+
+Початковий шаблон рекомендує розглянути перевірки ESLint,
+які враховують типи TypeScript: recommendedTypeChecked або
+strictTypeChecked. Для них потрібне відповідне налаштування
+доступу ESLint до TypeScript-проєкту.
+
+Додатково можна розглянути eslint-plugin-react-x та
+eslint-plugin-react-dom.
+
+Це можливі покращення, а не перелік уже підключених перевірок.
+Актуальні налаштування містяться в eslint.config.js.
