@@ -1,0 +1,29 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  repository-checks:
+    name: Repository checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Check repository files
+        run: python3 scripts/check_repository.py
+      - name: Explain current coverage
+        run: |
+          echo 'Repository checks only. Frontend/backend lint, build and tests must be added with application scaffolds.' >> "$GITHUB_STEP_SUMMARY"
