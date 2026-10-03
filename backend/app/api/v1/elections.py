@@ -1,29 +1,51 @@
 import uuid
-from typing import List
-from fastapi import APIRouter, Depends, status
-from sqlalchemy.ext.asyncio import AsyncSession
+from typing import AsyncGenerator, List
+from fastapi import APIRouter, Depends, Header, HTTPException, status
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
+from app.database import AsyncSessionLocal
+from app.models.voting import Election, User, VoterParticipation
 from app.schemas.voting import (
     ElectionOut,
+    ElectionResultOut,
     VoteRequest,
     VoteResponse,
-    ElectionResultOut,
 )
-from app.models.voting import Election, VoterParticipation, User
 from app.services.voting_service import VotingService
 
-# Заглушка залежності авторизації (яку передасть Backend Auth)
-async def get_current_user() -> User:
-    # Тимчасовий мок до інтеграції Google OAuth
+
+# Реальна асинхронна сесія до вашої бази даних Neon
+async def get_db() -> AsyncGenerator[AsyncSession, None]:
+    async with AsyncSessionLocal() as session:
+        yield session
+
+
+# Мок-авторизація з можливістю тестувати різних юзерів через Swagger/Postman
+async def get_current_user(
+    x_user_id: str | None = Header(
+        None, description="Mock User UUID для тестів (за замовчуванням дефолтний студент)"
+    ),
+) -> User:
+    if not x_user_id:
+        return User(
+            id=uuid.UUID("a0000000-0000-0000-0000-000000000001"),
+            email="test.student@ukma.edu.ua",
+        )
+    try:
+        user_uuid = uuid.UUID(x_user_id)
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Невалідний UUID у заголовку X-User-Id",
+        )
     return User(
-        id=uuid.UUID("a0000000-0000-0000-0000-000000000001"),
+        id=user_uuid,
         email="test.student@ukma.edu.ua",
+        is_admin=False,
     )
 
-# Залежність сесії БД
-async def get_db() -> AsyncSession:
-    raise NotImplementedError("Підключіть вашу AsyncSession з database.py")
 
 router = APIRouter(prefix="/elections", tags=["Elections & Voting Core"])
 
@@ -34,7 +56,10 @@ async def list_elections(
     current_user: User = Depends(get_current_user),
 ):
     """Отримати список усіх активних голосувань із відміткою, чи голосував студент."""
-    result = await db.execute(select(Election))
+    # Підтягуємо кандидатів через selectinload, щоб уникнути MissingGreenlet при формуванні схем
+    result = await db.execute(
+        select(Election).options(selectinload(Election.candidates))
+    )
     elections = result.scalars().all()
 
     # Отримуємо ID виборів, де студент уже проголосував
@@ -72,7 +97,10 @@ async def vote(
         candidate_id=payload.candidate_id,
         user=current_user,
     )
-    return VoteResponse()
+    return VoteResponse(
+        status="success",
+        message="Ваш голос успішно зараховано",
+    )
 
 
 @router.get("/{election_id}/results", response_model=ElectionResultOut)
