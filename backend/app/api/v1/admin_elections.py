@@ -19,6 +19,8 @@ from app.schemas.admin_elections import (
 
 router = APIRouter(prefix="/admin/elections", tags=["Admin: Elections Management"])
 
+MOCK_ADMIN_ID = uuid.UUID("a0000000-0000-0000-0000-000000000001")
+
 @router.post("", response_model=ElectionDetailResponse, status_code=status.HTTP_201_CREATED)
 async def create_election_draft(
     payload: ElectionCreate,
@@ -32,7 +34,7 @@ async def create_election_draft(
         status=ElectionStatus.DRAFT,
         starts_at=payload.starts_at,
         ends_at=payload.ends_at,
-        created_by=admin.id,
+        created_by=MOCK_ADMIN_ID,
     )
     db.add(election)
     await db.flush()
