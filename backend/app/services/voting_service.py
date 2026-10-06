@@ -1,5 +1,6 @@
 import uuid
 from datetime import datetime, timezone
+from asyncpg.exceptions import UniqueViolationError
 from fastapi import HTTPException, status
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
@@ -40,7 +41,7 @@ class VotingService:
                 detail="Голосування не знайдено",
             )
 
-        # Безпечна нормалізація до UTC, щоб уникнути TypeError: can't compare offset-naive and offset-aware datetimes
+        # Безпечна нормалізація до UTC
         starts_at = (
             election.starts_at.replace(tzinfo=timezone.utc)
             if election.starts_at.tzinfo is None
@@ -97,14 +98,31 @@ class VotingService:
             ballot = Ballot(election_id=election_id, candidate_id=candidate_id)
             db.add(ballot)
 
-            # Перехоплюємо UniqueConstraint при одночасному подвійному запиті
             await db.flush()
             await db.commit()
-        except IntegrityError:
+        except IntegrityError as exc:
             await db.rollback()
+
+            orig_error = getattr(exc, "orig", None)
+            error_msg = str(exc).lower()
+
+            # Перевіряємо, чи помилка викликана саме порушенням унікальності участі у виборах
+            is_duplicate_vote = (
+                isinstance(orig_error, UniqueViolationError)
+                or "unique constraint" in error_msg
+                or "voter_participations" in error_msg
+            )
+
+            if is_duplicate_vote:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="Ви вже проголосували в цьому голосуванні",
+                )
+
+            # Інші помилки цілісності не маскуємо під повторний голос
             raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="Ви вже проголосували в цьому голосуванні",
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Помилка цілісності бази даних при збереженні голосу",
             )
 
         return True
