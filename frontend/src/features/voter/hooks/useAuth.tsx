@@ -33,10 +33,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     try {
       await api.post("/api/auth/logout");
       setUser(null);
-    } catch (e) {
-      setError(e instanceof ApiError ? e.message : "Не вдалося вийти");
-    }
-  }
+         } catch (e) {
+         if (e instanceof ApiError) {
+           setError(e.message);
+           } else {
+            setError("Не вдалося вийти");
+           }
+           }
+         }
 
   return (
     <AuthContext.Provider value={{ user, isLoading, error, login, logout }}>
