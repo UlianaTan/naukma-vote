@@ -44,7 +44,7 @@ def main():
         print(f"ERROR: {error}")
     if errors:
         return 1
-    print("Repository checks passed. Application checks are not configured yet.")
+    print("Repository checks passed. Frontend checks run in a separate CI job.")
     return 0
 
 
