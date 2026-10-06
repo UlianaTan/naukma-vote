@@ -1,29 +1,33 @@
 import uuid
 from datetime import datetime, timezone
+from asyncpg.exceptions import UniqueViolationError
 from fastapi import HTTPException, status
-from sqlalchemy import select, func
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.models.voting import (
-    Election,
-    Candidate,
-    EligibleVoter,
-    VoterParticipation,
     Ballot,
+    Candidate,
+    Election,
     ElectionStatus,
+    EligibleVoter,
     User,
+    VoterParticipation,
 )
-from app.schemas.voting import ElectionResultOut, CandidateResult
+from app.schemas.voting import CandidateResult, ElectionResultOut
 
 
 class VotingService:
 
     @staticmethod
     async def cast_vote(
-        db: AsyncSession, election_id: uuid.UUID, candidate_id: uuid.UUID, user: User
-    ):
+        db: AsyncSession,
+        election_id: uuid.UUID,
+        candidate_id: uuid.UUID,
+        user: User,
+    ) -> bool:
         now = datetime.now(timezone.utc)
 
         # 1. Перевіряємо існування голосування
@@ -37,9 +41,21 @@ class VotingService:
                 detail="Голосування не знайдено",
             )
 
+        # Безпечна нормалізація до UTC
+        starts_at = (
+            election.starts_at.replace(tzinfo=timezone.utc)
+            if election.starts_at.tzinfo is None
+            else election.starts_at
+        )
+        ends_at = (
+            election.ends_at.replace(tzinfo=timezone.utc)
+            if election.ends_at.tzinfo is None
+            else election.ends_at
+        )
+
         # 2. Перевіряємо статус і дедлайн
         if election.status != ElectionStatus.ACTIVE or not (
-            election.starts_at <= now <= election.ends_at
+            starts_at <= now <= ends_at
         ):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -49,7 +65,8 @@ class VotingService:
         # 3. Перевіряємо, чи кандидат належить до цих виборів
         cand_res = await db.execute(
             select(Candidate).where(
-                Candidate.id == candidate_id, Candidate.election_id == election_id
+                Candidate.id == candidate_id,
+                Candidate.election_id == election_id,
             )
         )
         if not cand_res.scalar_one_or_none():
@@ -58,7 +75,7 @@ class VotingService:
                 detail="Недійсний кандидат для цього голосування",
             )
 
-        # 4. Перевіряємо whitelist (чи входить студент у список голосуючих)
+        # 4. Перевіряємо whitelist
         whitelist_res = await db.execute(
             select(EligibleVoter).where(
                 EligibleVoter.election_id == election_id,
@@ -71,26 +88,41 @@ class VotingService:
                 detail="Вас немає у списку виборців для цього голосування",
             )
 
-        # 5. Атомарна транзакція: фіксуємо факт явки та кладемо анонімний бюлетень
+        # 5. Атомарна транзакція: факт явки + анонімний бюлетень
         try:
-            # Фіксація явки
             participation = VoterParticipation(
                 election_id=election_id, user_id=user.id
             )
             db.add(participation)
 
-            # Анонімний бюлетень (жодного user_id!)
             ballot = Ballot(election_id=election_id, candidate_id=candidate_id)
             db.add(ballot)
 
-            # Робимо flush, щоб перехопити колізію UniqueConstraint при спробі подвійного кліку
             await db.flush()
             await db.commit()
-        except IntegrityError:
+        except IntegrityError as exc:
             await db.rollback()
+
+            orig_error = getattr(exc, "orig", None)
+            error_msg = str(exc).lower()
+
+            # Перевіряємо, чи помилка викликана саме порушенням унікальності участі у виборах
+            is_duplicate_vote = (
+                isinstance(orig_error, UniqueViolationError)
+                or "unique constraint" in error_msg
+                or "voter_participations" in error_msg
+            )
+
+            if is_duplicate_vote:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="Ви вже проголосували в цьому голосуванні",
+                )
+
+            # Інші помилки цілісності не маскуємо під повторний голос
             raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="Ви вже проголосували в цьому голосуванні",
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Помилка цілісності бази даних при збереженні голосу",
             )
 
         return True
@@ -117,7 +149,6 @@ class VotingService:
                 detail="Результати доступні лише після закриття голосування",
             )
 
-        # Агрегований підрахунок голосів через GROUP BY
         votes_res = await db.execute(
             select(Ballot.candidate_id, func.count(Ballot.id).label("count"))
             .where(Ballot.election_id == election_id)
