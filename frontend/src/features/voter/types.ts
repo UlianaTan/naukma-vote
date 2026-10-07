@@ -7,6 +7,12 @@ export interface User {
 
 export type ElectionStatus = "draft" | "active" | "closed";
 
+export interface Candidate {
+  id: string;
+  name: string;
+  description: string;
+}
+
 export interface Election {
   id: string;
   title: string;
@@ -14,4 +20,10 @@ export interface Election {
   status: ElectionStatus;
   startsAt: string;
   endsAt: string;
+  candidates: Candidate[];
+}
+
+export interface SubmitVoteResponse {
+  success: boolean;
+  votedAt: string;
 }
