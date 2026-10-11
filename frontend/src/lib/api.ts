@@ -1,14 +1,32 @@
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
+
 export class ApiError extends Error {
-  constructor(message: string) {
+  readonly status: number;
+
+  constructor(status: number, message: string) {
     super(message);
     this.name = 'ApiError';
+    this.status = status;
   }
 }
 
+async function request<T>(path: string, options: RequestInit): Promise<T> {
+  const response = await fetch(`${API_BASE_URL}${path}`, {
+    ...options,
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json', ...options.headers },
+  });
+  if (!response.ok) {
+    throw new ApiError(response.status, await response.text() || response.statusText);
+  }
+  if (response.status === 204) return undefined as T;
+  return response.json() as Promise<T>;
+}
+
 export const api = {
-  // Додаємо <T>, щоб api розумів типи (наприклад <User>), і _ перед змінними, щоб лінтер не сварився
-  get: async <T,>(_url: string, _config?: any): Promise<T> => ({} as T),
-  post: async <T,>(_url: string, _data?: any, _config?: any): Promise<T> => ({} as T),
-  patch: async <T,>(_url: string, _data?: any, _config?: any): Promise<T> => ({} as T),
-  delete: async <T,>(_url: string, _config?: any): Promise<T> => ({} as T),
+  get: <T>(path: string) => request<T>(path, { method: 'GET' }),
+  post: <T>(path: string, body?: unknown) => request<T>(path, {
+    method: 'POST',
+    body: body === undefined ? undefined : JSON.stringify(body),
+  }),
 };

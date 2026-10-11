@@ -59,7 +59,7 @@ export default function CreateElectionPage() {
       setStatus('success');
       setFormData({ title: '', description: '', startDate: '', endDate: '' });
       setCandidates(['', '']);
-    } catch (_err) {
+    } catch {
       setErrorMessage('Помилка сервера. Спробуйте пізніше.');
       setStatus('error');
     }
