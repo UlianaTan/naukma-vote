@@ -24,6 +24,48 @@ jobs:
           persist-credentials: false
       - name: Check repository files
         run: python3 scripts/check_repository.py
-      - name: Explain current coverage
+
+  frontend:
+    name: Frontend lint and build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install dependencies from lockfile
+        id: install
+        run: npm ci
+      - name: Lint
+        id: lint
+        run: npm run lint
+      - name: Build
+        id: build
+        # Check the build even if lint failed, so both results are visible.
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: npm run build
+      - name: Summarize frontend checks
+        if: ${{ always() }}
+        env:
+          INSTALL_RESULT: ${{ steps.install.outcome }}
+          LINT_RESULT: ${{ steps.lint.outcome }}
+          BUILD_RESULT: ${{ steps.build.outcome }}
         run: |
-          echo 'Repository checks only. Frontend/backend lint, build and tests must be added with application scaffolds.' >> "$GITHUB_STEP_SUMMARY"
+          {
+            echo '### Frontend checks'
+            echo '| Check | Result |'
+            echo '| --- | --- |'
+            echo "| npm ci | $INSTALL_RESULT |"
+            echo "| npm run lint | $LINT_RESULT |"
+            echo "| npm run build | $BUILD_RESULT |"
+            echo ''
+            echo 'These checks do not deploy the site or verify login and voting scenarios.'
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -68,7 +68,7 @@ export default function CreateElectionPage() {
       // Очищення форми після успішного створення
       setFormData({ title: '', description: '', startDate: '', endDate: '' });
       setCandidates(['', '']);
-    } catch (err) {
+    } catch {
       setErrorMessage('Помилка сервера. Спробуйте пізніше.');
       setStatus('error');
     }

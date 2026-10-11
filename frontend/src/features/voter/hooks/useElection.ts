@@ -10,32 +10,30 @@ interface UseElectionResult {
 }
 
 export function useElection(id: string | undefined): UseElectionResult {
-  const [election, setElection] = useState<Election | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [loaded, setLoaded] = useState<{
+    id: string;
+    election: Election | null;
+  } | null>(null);
 
   useEffect(() => {
-    if (!id) {
-      setError("Не вказано ідентифікатор голосування");
-      setIsLoading(false);
-      return;
-    }
-
-    setIsLoading(true);
-    setError(null);
+    if (!id) return;
 
     const timer = setTimeout(() => {
-      const found = mockElections.find((e) => e.id === id);
-      if (found) {
-        setElection(found);
-      } else {
-        setError("Голосування не знайдено");
-      }
-      setIsLoading(false);
+      setLoaded({ id, election: mockElections.find((e) => e.id === id) ?? null });
     }, 400);
 
     return () => clearTimeout(timer);
   }, [id]);
 
-  return { election, isLoading, error };
+  if (!id) {
+    return { election: null, isLoading: false, error: "Не вказано ідентифікатор голосування" };
+  }
+  if (loaded?.id !== id) {
+    return { election: null, isLoading: true, error: null };
+  }
+  return {
+    election: loaded.election,
+    isLoading: false,
+    error: loaded.election ? null : "Голосування не знайдено",
+  };
 }

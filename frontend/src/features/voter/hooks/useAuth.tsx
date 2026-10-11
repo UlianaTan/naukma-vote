@@ -26,21 +26,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   function login() {
-    window.location.href = `${import.meta.env.VITE_API_URL || "http://localhost:8000"}/api/auth/google/login`;
+    window.location.href = `${import.meta.env.VITE_API_BASE_URL || "http://localhost:8000"}/api/auth/google/login`;
   }
 
   async function logout() {
     try {
       await api.post("/api/auth/logout");
       setUser(null);
-         } catch (e) {
-         if (e instanceof ApiError) {
-           setError(e.message);
-           } else {
-            setError("Не вдалося вийти");
-           }
-           }
-         }
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : "Не вдалося вийти");
+    }
+  }
 
   return (
     <AuthContext.Provider value={{ user, isLoading, error, login, logout }}>
