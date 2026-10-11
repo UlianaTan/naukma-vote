@@ -1,19 +1,35 @@
 # Backend
 
-Спільний Python + FastAPI застосунок для Auth & Security та Voting Core.
-Каркас ще не створено. Voting Core готує початковий PR спільно з Auth.
+FastAPI Voting Core. Перевірене середовище: Python 3.13.
 
-Перший PR: pyproject.toml, зафіксовані залежності та версія Python,
-застосунок FastAPI, GET /health, тест цього endpoint, інструкції встановлення,
-запуску й перевірок. Запропоновані інструменти: Ruff, pytest, SQLAlchemy, Alembic.
-Узгодьте точні команди з DevOps для підключення CI у тому самому PR.
+З кореня репозиторію:
 
-Пропонована структура: app/main.py, app/auth/, app/elections/, app/voting/,
-app/audit/, app/db/, tests/, migrations/.
+```sh
+python3.13 -m venv .venv
+.venv/bin/pip install -r backend/requirements.txt
+cp backend/.env.example backend/.env
+# Налаштувати DATABASE_URL для окремої локальної PostgreSQL.
+.venv/bin/alembic upgrade head
+.venv/bin/python -m uvicorn app.main:app --app-dir backend --reload
+```
 
-Voting Core відповідає за схему й Alembic-міграції, DevOps — за їх запуск
-у середовищі. Не замінюйте міграції ручним створенням таблиць на staging.
+Регресійні перевірки без зовнішньої БД:
 
-.env.example містить пропозиції назв змінних, які код ще не читає.
-Backend Auth реалізує перевірку токена й домену на сервері;
-параметр Google hd сам по собі не є перевіркою доступу.
+```sh
+cd backend
+../.venv/bin/python -m unittest discover -s tests -v
+```
+
+Тести використовують SQLite з foreign keys. Вони перевіряють створення
+чернетки з реальним записом адміністратора, PATCH дат, null/timezone
+та класифікацію помилки повторного голосу. Це не замінює PostgreSQL
+інтеграційні перевірки онлайн-міграцій та паралельного голосування.
+
+OpenAPI: http://localhost:8000/docs. Адміністратор: `/admin/elections`,
+редагування через PATCH. Виборець: `/api/v1/elections`,
+`/api/v1/elections/{id}/vote`, `/api/v1/elections/{id}/results`.
+
+Авторизація поки mock: адміністратор створюється в БД, виборець обирається
+через X-User-Id. Цей етап призначений для локальної розробки.
+Google OAuth і production-захист ще не реалізовані. Розділення таблиць
+явки й бюлетенів не доводить повну анонімність на всіх рівнях системи.

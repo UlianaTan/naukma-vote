@@ -26,7 +26,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   function login() {
-    window.location.href = `${import.meta.env.VITE_API_URL || "http://localhost:8000"}/api/auth/google/login`;
+    window.location.href = `${import.meta.env.VITE_API_BASE_URL || "http://localhost:8000"}/api/auth/google/login`;
   }
 
   async function logout() {
