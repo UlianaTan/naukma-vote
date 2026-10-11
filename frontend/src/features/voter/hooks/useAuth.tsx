@@ -33,7 +33,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     try {
       await api.post("/api/auth/logout");
       setUser(null);
-    } catch (e) {
+    } catch (e: any) {
       setError(e instanceof ApiError ? e.message : "Не вдалося вийти");
     }
   }
