@@ -7,6 +7,7 @@ import { ResultPage } from './features/voter/pages/ResultPage';
 import AdminLayout from './components/layout/AdminLayout';
 import AdminElectionsPage from './pages/admin/AdminElectionsPage';
 import CreateElectionPage from './pages/admin/CreateElectionPage';
+import VotersManagementPage from './pages/admin/VotersManagementPage';
 
 function ProtectedVoterRoute({ children }: { children: React.ReactNode }) {
   const { user, isLoading } = useAuth();
@@ -50,7 +51,9 @@ function App() {
           <Route path="/admin" element={<AdminLayout />}>
             <Route index element={<AdminElectionsPage />} />
             <Route path="create" element={<CreateElectionPage />} />
+            <Route path="voters" element={<VotersManagementPage />} />
           </Route>
+          <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </AuthProvider>
     </BrowserRouter>

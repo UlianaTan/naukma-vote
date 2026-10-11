@@ -8,16 +8,14 @@ export default function CreateElectionPage() {
     endDate: '',
   });
   
-  const [candidates, setCandidates] = useState(['', '']); // Мінімум 2 кандидати
+  const [candidates, setCandidates] = useState(['', '']);
   const [status, setStatus] = useState<'idle' | 'submitting' | 'success' | 'error'>('idle');
   const [errorMessage, setErrorMessage] = useState('');
 
-  // Обробка текстових полів форми
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
     setFormData({ ...formData, [e.target.name]: e.target.value });
   };
 
-  // Обробка списку кандидатів
   const handleCandidateChange = (index: number, value: string) => {
     const newCandidates = [...candidates];
     newCandidates[index] = value;
@@ -32,13 +30,11 @@ export default function CreateElectionPage() {
     }
   };
 
-  // Валідація та відправка
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMessage('');
     setStatus('idle');
 
-    // 1. Валідація
     if (!formData.title || !formData.description || !formData.startDate || !formData.endDate) {
       setErrorMessage('Усі основні поля є обовʼязковими.');
       setStatus('error');
@@ -56,16 +52,11 @@ export default function CreateElectionPage() {
       return;
     }
 
-    // 2. Імітація запиту на бекенд (Mock)
     setStatus('submitting');
     try {
-      await new Promise(resolve => setTimeout(resolve, 1500)); // Імітація затримки мережі
-      
-      // Тут в майбутньому буде реальний POST-запит, наприклад:
-      // await api.post('/api/elections', { ...formData, candidates: validCandidates });
+      await new Promise(resolve => setTimeout(resolve, 1500)); 
       
       setStatus('success');
-      // Очищення форми після успішного створення
       setFormData({ title: '', description: '', startDate: '', endDate: '' });
       setCandidates(['', '']);
     } catch {
@@ -91,7 +82,6 @@ export default function CreateElectionPage() {
       )}
 
       <form onSubmit={handleSubmit} className="space-y-6">
-        {/* Основна інформація */}
         <div className="space-y-4">
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Назва голосування</label>
@@ -118,7 +108,6 @@ export default function CreateElectionPage() {
           </div>
         </div>
 
-        {/* Дати */}
         <div className="grid grid-cols-2 gap-4">
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Початок</label>
@@ -142,7 +131,6 @@ export default function CreateElectionPage() {
           </div>
         </div>
 
-        {/* Кандидати */}
         <div>
           <label className="block text-sm font-medium text-gray-700 mb-2">Кандидати</label>
           <div className="space-y-2">
@@ -176,7 +164,6 @@ export default function CreateElectionPage() {
           </button>
         </div>
 
-        {/* Сабміт */}
         <div className="pt-4 border-t border-gray-200 flex justify-end">
           <button
             type="submit"
