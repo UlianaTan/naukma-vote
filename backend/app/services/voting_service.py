@@ -1,6 +1,5 @@
 import uuid
 from datetime import datetime, timezone
-from asyncpg.exceptions import UniqueViolationError
 from fastapi import HTTPException, status
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
@@ -17,6 +16,20 @@ from app.models.voting import (
     VoterParticipation,
 )
 from app.schemas.voting import CandidateResult, ElectionResultOut
+
+
+def is_duplicate_vote_error(exc: IntegrityError) -> bool:
+    """Inspect driver metadata, including SQLAlchemy's asyncpg wrapper."""
+    error = exc.orig
+    seen = set()
+    sqlstate = None
+    constraint = None
+    while error is not None and id(error) not in seen:
+        seen.add(id(error))
+        sqlstate = getattr(error, "sqlstate", None) or getattr(error, "pgcode", None) or sqlstate
+        constraint = getattr(error, "constraint_name", None) or constraint
+        error = getattr(error, "__cause__", None)
+    return sqlstate == "23505" and constraint == "uq_user_election_vote"
 
 
 class VotingService:
@@ -103,17 +116,7 @@ class VotingService:
         except IntegrityError as exc:
             await db.rollback()
 
-            orig_error = getattr(exc, "orig", None)
-            error_msg = str(exc).lower()
-
-            # Перевіряємо, чи помилка викликана саме порушенням унікальності участі у виборах
-            is_duplicate_vote = (
-                isinstance(orig_error, UniqueViolationError)
-                or "unique constraint" in error_msg
-                or "voter_participations" in error_msg
-            )
-
-            if is_duplicate_vote:
+            if is_duplicate_vote_error(exc):
                 raise HTTPException(
                     status_code=status.HTTP_409_CONFLICT,
                     detail="Ви вже проголосували в цьому голосуванні",

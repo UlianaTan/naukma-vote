@@ -19,8 +19,6 @@ from app.schemas.admin_elections import (
 
 router = APIRouter(prefix="/admin/elections", tags=["Admin: Elections Management"])
 
-MOCK_ADMIN_ID = uuid.UUID("a0000000-0000-0000-0000-000000000001")
-
 @router.post("", response_model=ElectionDetailResponse, status_code=status.HTTP_201_CREATED)
 async def create_election_draft(
     payload: ElectionCreate,
@@ -34,7 +32,7 @@ async def create_election_draft(
         status=ElectionStatus.DRAFT,
         starts_at=payload.starts_at,
         ends_at=payload.ends_at,
-        created_by=MOCK_ADMIN_ID,
+        created_by=admin.id,
     )
     db.add(election)
     await db.flush()
@@ -103,6 +101,10 @@ async def update_election_draft(
         )
 
     update_data = payload.model_dump(exclude_unset=True)
+    starts_at = update_data.get("starts_at", election.starts_at)
+    ends_at = update_data.get("ends_at", election.ends_at)
+    if ends_at <= starts_at:
+        raise HTTPException(status_code=422, detail="Час завершення має бути пізнішим за час початку")
     for field, val in update_data.items():
         setattr(election, field, val)
 
