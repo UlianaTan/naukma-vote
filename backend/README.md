@@ -1,22 +1,25 @@
 # Backend
 
-FastAPI Voting Core. Перевірене середовище: Python 3.13.
+FastAPI Voting Core. Python 3.13 зафіксовано у `.python-version`.
 
 З кореня репозиторію:
 
 ```sh
 python3.13 -m venv .venv
-.venv/bin/pip install -r backend/requirements.txt
+.venv/bin/pip install -r backend/requirements-dev.txt
 cp backend/.env.example backend/.env
 # Налаштувати DATABASE_URL для окремої локальної PostgreSQL.
 .venv/bin/alembic upgrade head
 .venv/bin/python -m uvicorn app.main:app --app-dir backend --reload
 ```
 
-Регресійні перевірки без зовнішньої БД:
+Runtime-залежності: requirements.txt. Dev-залежності та Ruff: requirements-dev.txt.
+
+Lint і регресійні перевірки без зовнішньої БД:
 
 ```sh
 cd backend
+../.venv/bin/python -m ruff check .
 ../.venv/bin/python -m unittest discover -s tests -v
 ```
 
@@ -33,3 +36,7 @@ OpenAPI: http://localhost:8000/docs. Адміністратор: `/admin/electio
 через X-User-Id. Цей етап призначений для локальної розробки.
 Google OAuth і production-захист ще не реалізовані. Розділення таблиць
 явки й бюлетенів не доводить повну анонімність на всіх рівнях системи.
+
+Ruff: правила E4/E7/E9/F, конфігурація у backend/pyproject.toml.
+CI виконує встановлення, pip check, lint і п’ять регресійних тестів.
+SQLite тести не звертаються до staging/production PostgreSQL.
