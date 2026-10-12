@@ -13,7 +13,6 @@ from app.schemas.admin_elections import (
     ElectionUpdate,
     ElectionDetailResponse,
     CandidateCreate,
-    CandidateUpdate,
     CandidateResponse,
 )
 

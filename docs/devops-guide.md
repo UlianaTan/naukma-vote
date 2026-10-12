@@ -12,11 +12,18 @@ CD додає доставку або розгортання перевірен�
 
 ## Що робить поточний CI
 
-Файл .github/workflows/ci.yml запускає scripts/check_repository.py
-для PR та push у main. Перевіряє обов'язкові файли, локальні посилання в
-документації та чи не потрапили .env-файли серед файлів Git.
-Це не повноцінний пошук усіх секретів. Frontend/backend lint, build і тести
-додаються разом із каркасами застосунків, без приховування їхніх помилок.
+.github/workflows/ci.yml запускається для PR та push у main:
+
+- Repository checks: структура, локальні посилання й .env-файли у Git.
+- Frontend lint and build: npm ci, lint та production build.
+- Backend lint and tests: встановлення runtime/dev залежностей, pip check,
+  Ruff і регресійні unittest без зовнішньої БД.
+
+CI читає Node 24 із .nvmrc та Python 3.13 із .python-version.
+Backend runtime: backend/requirements.txt; dev: backend/requirements-dev.txt.
+Тести використовують SQLite. PostgreSQL integration tests і staging
+додаються наступними етапами. Перевірка .env-файлів не є повноцінним
+скануванням усіх секретів.
 
 ## Як опублікувати підготовлені файли
 

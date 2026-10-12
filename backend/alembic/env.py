@@ -5,13 +5,6 @@ from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config
 from alembic import context
 
-import sys
-from pathlib import Path
-
-# Додаємо шлях до папки backend у sys.path
-backend_dir = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(backend_dir))
-
 from app.models.voting import Base  # Підключаємо спільний Base моделей
 from app.database import DATABASE_URL
 

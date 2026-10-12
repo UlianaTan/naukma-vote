@@ -44,7 +44,7 @@ def main():
         print(f"ERROR: {error}")
     if errors:
         return 1
-    print("Repository checks passed. Frontend checks run in a separate CI job.")
+    print("Repository checks passed. Frontend and backend checks run in separate CI jobs.")
     return 0
 
 

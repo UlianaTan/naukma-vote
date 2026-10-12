@@ -38,7 +38,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@v4
         with:
-          node-version: '24'
+          node-version-file: '.nvmrc'
           cache: npm
           cache-dependency-path: frontend/package-lock.json
       - name: Install dependencies from lockfile
@@ -69,3 +69,34 @@ jobs:
             echo ''
             echo 'These checks do not deploy the site or verify login and voting scenarios.'
           } >> "$GITHUB_STEP_SUMMARY"
+
+  backend:
+    name: Backend lint and tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: backend
+    env:
+      DATABASE_URL: postgresql+asyncpg://ci:ci@127.0.0.1:5432/naukma_vote_ci
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version-file: '.python-version'
+          cache: pip
+          cache-dependency-path: |
+            backend/requirements.txt
+            backend/requirements-dev.txt
+      - name: Install backend and lint dependencies
+        id: backend-install
+        run: python -m pip install -r requirements-dev.txt
+      - name: Check dependency compatibility
+        run: python -m pip check
+      - name: Lint
+        run: python -m ruff check .
+      - name: Regression tests
+        if: ${{ !cancelled() && steps.backend-install.outcome == 'success' }}
+        run: python -m unittest discover -s tests -v

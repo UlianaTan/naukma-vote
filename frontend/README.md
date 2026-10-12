@@ -73,3 +73,8 @@ export default defineConfig([
 ])
 
 ```
+
+## Версія Node.js
+
+Node 24: кореневий .nvmrc (у frontend: `nvm use ../.nvmrc`).
+CI читає цей самий файл. Пакети фіксує package-lock.json.
