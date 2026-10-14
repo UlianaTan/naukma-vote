@@ -6,6 +6,8 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.domain.lifecycle import VotingWindow, voting_window
+from app.domain.tally import percent
 from app.models.voting import (
     Ballot,
     Candidate,
@@ -15,7 +17,15 @@ from app.models.voting import (
     User,
     VoterParticipation,
 )
-from app.schemas.voting import CandidateResult, ElectionResultOut
+from app.schemas.voting import (
+    AdminElectionResultOut,
+    CandidateResult,
+    ElectionOut,
+    ElectionResultOut,
+    TurnoutOut,
+)
+from app.services.election_service import close_if_expired
+from app.services.tally_service import TallyResult, compute_tally, count_ballots, count_eligible, count_participants
 
 
 def is_duplicate_vote_error(exc: IntegrityError) -> bool:
@@ -32,6 +42,35 @@ def is_duplicate_vote_error(exc: IntegrityError) -> bool:
     return sqlstate == "23505" and constraint == "uq_user_election_vote"
 
 
+def _email_key(user: User) -> str:
+    """Whitelist зберігається в нижньому регістрі, порівнюємо так само."""
+    return user.email.strip().lower()
+
+
+def _not_found() -> HTTPException:
+    return HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Голосування не знайдено")
+
+
+def _to_public_result(tally: TallyResult) -> ElectionResultOut:
+    return ElectionResultOut(
+        election_id=tally.election_id,
+        title=tally.title,
+        total_votes=tally.total_votes,
+        outcome=tally.outcome,
+        winner_ids=tally.winner_ids,
+        closed_at=tally.closed_at,
+        results=[
+            CandidateResult(
+                candidate_id=cid,
+                name=name,
+                votes_count=count,
+                percent=percent(count, tally.total_votes),
+            )
+            for cid, name, count in tally.rows
+        ],
+    )
+
+
 class VotingService:
 
     @staticmethod
@@ -41,35 +80,34 @@ class VotingService:
         candidate_id: uuid.UUID,
         user: User,
     ) -> bool:
-        now = datetime.now(timezone.utc)
-
-        # 1. Перевіряємо існування голосування
+        # 1. Блокуємо рядок голосування в режимі FOR SHARE до кінця транзакції.
+        #    Багато голосів проходять паралельно, але закриття (FOR UPDATE)
+        #    чекає на всі голоси, що вже в роботі, а голоси, які прийшли після
+        #    закриття, після очікування бачать статус CLOSED.
         result = await db.execute(
-            select(Election).where(Election.id == election_id)
+            select(Election)
+            .where(Election.id == election_id)
+            .with_for_update(read=True)
         )
         election = result.scalar_one_or_none()
         if not election:
+            raise _not_found()
+
+        # 2. Час фіксується ПІСЛЯ отримання блокування: голос, що чекав
+        #    закриття, оцінюється вже за станом після нього.
+        now = datetime.now(timezone.utc)
+        if election.status != ElectionStatus.ACTIVE:
             raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Голосування не знайдено",
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Голосування наразі не активне або завершилось",
             )
-
-        # Безпечна нормалізація до UTC
-        starts_at = (
-            election.starts_at.replace(tzinfo=timezone.utc)
-            if election.starts_at.tzinfo is None
-            else election.starts_at
-        )
-        ends_at = (
-            election.ends_at.replace(tzinfo=timezone.utc)
-            if election.ends_at.tzinfo is None
-            else election.ends_at
-        )
-
-        # 2. Перевіряємо статус і дедлайн
-        if election.status != ElectionStatus.ACTIVE or not (
-            starts_at <= now <= ends_at
-        ):
+        window = voting_window(election.starts_at, election.ends_at, now)
+        if window == VotingWindow.NOT_STARTED:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Голосування ще не розпочалось",
+            )
+        if window == VotingWindow.ENDED:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Голосування наразі не активне або завершилось",
@@ -77,7 +115,7 @@ class VotingService:
 
         # 3. Перевіряємо, чи кандидат належить до цих виборів
         cand_res = await db.execute(
-            select(Candidate).where(
+            select(Candidate.id).where(
                 Candidate.id == candidate_id,
                 Candidate.election_id == election_id,
             )
@@ -88,11 +126,11 @@ class VotingService:
                 detail="Недійсний кандидат для цього голосування",
             )
 
-        # 4. Перевіряємо whitelist
+        # 4. Перевіряємо whitelist (без урахування регістру)
         whitelist_res = await db.execute(
-            select(EligibleVoter).where(
+            select(EligibleVoter.id).where(
                 EligibleVoter.election_id == election_id,
-                EligibleVoter.email == user.email,
+                func.lower(EligibleVoter.email) == _email_key(user),
             )
         )
         if not whitelist_res.scalar_one_or_none():
@@ -101,16 +139,23 @@ class VotingService:
                 detail="Вас немає у списку виборців для цього голосування",
             )
 
-        # 5. Атомарна транзакція: факт явки + анонімний бюлетень
-        try:
-            participation = VoterParticipation(
-                election_id=election_id, user_id=user.id
+        # 5. Швидка перевірка повторного голосу (остаточний захист — UNIQUE)
+        already = await db.execute(
+            select(VoterParticipation.id).where(
+                VoterParticipation.election_id == election_id,
+                VoterParticipation.user_id == user.id,
             )
-            db.add(participation)
+        )
+        if already.scalar_one_or_none():
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Ви вже проголосували в цьому голосуванні",
+            )
 
-            ballot = Ballot(election_id=election_id, candidate_id=candidate_id)
-            db.add(ballot)
-
+        # 6. Атомарна транзакція: факт явки + анонімний бюлетень
+        try:
+            db.add(VoterParticipation(election_id=election_id, user_id=user.id))
+            db.add(Ballot(election_id=election_id, candidate_id=candidate_id))
             await db.flush()
             await db.commit()
         except IntegrityError as exc:
@@ -130,49 +175,137 @@ class VotingService:
 
         return True
 
+    # ---- Перегляд для виборця ------------------------------------------------
+
     @staticmethod
-    async def get_results(
-        db: AsyncSession, election_id: uuid.UUID
-    ) -> ElectionResultOut:
+    async def list_for_voter(db: AsyncSession, user: User) -> list[ElectionOut]:
+        """Не-чернетки, до яких користувача допущено (за whitelist)."""
+        result = await db.execute(
+            select(Election)
+            .options(selectinload(Election.candidates))
+            .join(EligibleVoter, EligibleVoter.election_id == Election.id)
+            .where(
+                Election.status != ElectionStatus.DRAFT,
+                func.lower(EligibleVoter.email) == _email_key(user),
+            )
+            .order_by(Election.starts_at.desc(), Election.id)
+        )
+        elections = result.scalars().all()
+
+        voted_res = await db.execute(
+            select(VoterParticipation.election_id).where(VoterParticipation.user_id == user.id)
+        )
+        voted_ids = set(voted_res.scalars().all())
+
+        out_list = []
+        for el in elections:
+            out = ElectionOut.model_validate(el)
+            out.has_voted = el.id in voted_ids
+            out_list.append(out)
+        return out_list
+
+    @staticmethod
+    async def get_for_voter(db: AsyncSession, election_id: uuid.UUID, user: User) -> ElectionOut:
+        await close_if_expired(db, election_id)
         result = await db.execute(
             select(Election)
             .options(selectinload(Election.candidates))
             .where(Election.id == election_id)
         )
         election = result.scalar_one_or_none()
-        if not election:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Голосування не знайдено",
-            )
+        # Чернетки для виборців не існують
+        if not election or election.status == ElectionStatus.DRAFT:
+            raise _not_found()
 
+        eligible = await db.execute(
+            select(EligibleVoter.id).where(
+                EligibleVoter.election_id == election_id,
+                func.lower(EligibleVoter.email) == _email_key(user),
+            )
+        )
+        if not eligible.scalar_one_or_none():
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Вас немає у списку виборців для цього голосування",
+            )
+        voted = await db.execute(
+            select(VoterParticipation.id).where(
+                VoterParticipation.election_id == election_id,
+                VoterParticipation.user_id == user.id,
+            )
+        )
+        out = ElectionOut.model_validate(election)
+        out.has_voted = voted.scalar_one_or_none() is not None
+        return out
+
+    # ---- Результати ------------------------------------------------------------
+
+    @staticmethod
+    async def _load_closed(db: AsyncSession, election_id: uuid.UUID) -> Election:
+        await close_if_expired(db, election_id)
+        result = await db.execute(
+            select(Election)
+            .where(Election.id == election_id)
+        )
+        election = result.scalar_one_or_none()
+        if not election or election.status == ElectionStatus.DRAFT:
+            raise _not_found()
+        return election
+
+    @staticmethod
+    async def get_results(db: AsyncSession, election_id: uuid.UUID) -> ElectionResultOut:
+        """Публічні результати: лише закрите ТА опубліковане голосування."""
+        election = await VotingService._load_closed(db, election_id)
         if election.status != ElectionStatus.CLOSED:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Результати доступні лише після закриття голосування",
             )
-
-        votes_res = await db.execute(
-            select(Ballot.candidate_id, func.count(Ballot.id).label("count"))
-            .where(Ballot.election_id == election_id)
-            .group_by(Ballot.candidate_id)
-        )
-        vote_counts = {row.candidate_id: row.count for row in votes_res.all()}
-
-        results_list = []
-        total_votes = 0
-        for cand in election.candidates:
-            count = vote_counts.get(cand.id, 0)
-            total_votes += count
-            results_list.append(
-                CandidateResult(
-                    candidate_id=cand.id, name=cand.name, votes_count=count
-                )
+        if not election.results_published:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Результати ще не опубліковані організатором",
             )
+        return _to_public_result(await compute_tally(db, election))
 
-        return ElectionResultOut(
-            election_id=election.id,
-            title=election.title,
-            total_votes=total_votes,
-            results=results_list,
+    @staticmethod
+    async def get_admin_tally(db: AsyncSession, election_id: uuid.UUID) -> tuple[Election, TallyResult]:
+        """Підсумки для організатора: після закриття, незалежно від публікації."""
+        election = await VotingService._load_closed(db, election_id)
+        if election.status != ElectionStatus.CLOSED:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Результати доступні лише після закриття голосування",
+            )
+        return election, await compute_tally(db, election)
+
+    @staticmethod
+    async def get_admin_results(db: AsyncSession, election_id: uuid.UUID) -> AdminElectionResultOut:
+        election, tally = await VotingService.get_admin_tally(db, election_id)
+        public = _to_public_result(tally)
+        return AdminElectionResultOut(
+            **public.model_dump(),
+            eligible_count=tally.eligible_count,
+            participants_count=tally.participants_count,
+            turnout_percent=tally.turnout_percent,
+            consistent=tally.consistent,
+            results_published=bool(election.results_published),
+        )
+
+    @staticmethod
+    async def get_turnout(db: AsyncSession, election_id: uuid.UUID) -> TurnoutOut:
+        """Явка без розбивки по кандидатах — безпечна під час активного голосування."""
+        await close_if_expired(db, election_id)
+        exists = await db.scalar(select(Election.id).where(Election.id == election_id))
+        if not exists:
+            raise _not_found()
+        eligible = await count_eligible(db, election_id)
+        participants = await count_participants(db, election_id)
+        ballots = await count_ballots(db, election_id)
+        return TurnoutOut(
+            election_id=election_id,
+            eligible_count=eligible,
+            participants_count=participants,
+            turnout_percent=percent(participants, eligible),
+            consistent=ballots == participants,
         )

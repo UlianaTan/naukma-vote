@@ -1,12 +1,12 @@
 import uuid
-from typing import AsyncGenerator, List
+from typing import List
 from fastapi import APIRouter, Depends, Header, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
 
-from app.database import AsyncSessionLocal
-from app.models.voting import Election, User, UserRole, VoterParticipation
+from app.core.config import get_settings
+from app.database import get_db
+from app.models.voting import User, UserRole
 from app.schemas.voting import (
     ElectionOut,
     ElectionResultOut,
@@ -14,12 +14,6 @@ from app.schemas.voting import (
     VoteResponse,
 )
 from app.services.voting_service import VotingService
-
-
-# Асинхронна сесія до бази даних
-async def get_db() -> AsyncGenerator[AsyncSession, None]:
-    async with AsyncSessionLocal() as session:
-        yield session
 
 
 # Тестові профілі для перевірки допуску через заголовок X-User-Id
@@ -51,6 +45,12 @@ async def get_current_user(
     Отримує наявного або автоматично створює тестового користувача в БД,
     щоб забезпечити дійсний Foreign Key для VoterParticipation.
     """
+    if not get_settings().allow_mock_auth:
+        # У production mock вимкнено: цю залежність має замінити Auth-модуль
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Автентифікацію не налаштовано",
+        )
     user_uuid = DEFAULT_TEST_USER_ID
 
     if x_user_id:
@@ -95,27 +95,18 @@ async def list_elections(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Отримати список усіх активних голосувань із відміткою, чи голосував студент."""
-    result = await db.execute(
-        select(Election).options(selectinload(Election.candidates))
-    )
-    elections = result.scalars().all()
+    """Голосування (крім чернеток), до яких користувача допущено, з відміткою has_voted."""
+    return await VotingService.list_for_voter(db, current_user)
 
-    # Отримуємо ID виборів, де студент уже проголосував
-    voted_res = await db.execute(
-        select(VoterParticipation.election_id).where(
-            VoterParticipation.user_id == current_user.id
-        )
-    )
-    voted_election_ids = set(voted_res.scalars().all())
 
-    response = []
-    for el in elections:
-        out = ElectionOut.model_validate(el)
-        out.has_voted = el.id in voted_election_ids
-        response.append(out)
-
-    return response
+@router.get("/{election_id}", response_model=ElectionOut)
+async def get_election(
+    election_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Деталі голосування та кандидати (404 для чернеток, 403 поза списком виборців)."""
+    return await VotingService.get_for_voter(db, election_id, current_user)
 
 
 @router.post(
@@ -148,5 +139,5 @@ async def get_results(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Отримати результати після закриття виборів."""
+    """Агреговані результати: лише після закриття та публікації організатором."""
     return await VotingService.get_results(db=db, election_id=election_id)
