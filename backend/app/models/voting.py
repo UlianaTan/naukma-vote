@@ -1,30 +1,31 @@
-import enum
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from sqlalchemy import (
+    JSON,
+    Boolean,
+    CheckConstraint,
     Column,
-    String,
     DateTime,
-    ForeignKey,
     Enum,
-    UniqueConstraint,
+    ForeignKey,
+    Index,
+    String,
     Text,
+    UniqueConstraint,
+    false,
+    func,
 )
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import declarative_base, relationship
+
+from app.models.enums import AuditAction, ElectionStatus, UserRole  # noqa: F401
 
 Base = declarative_base()
 
 
-class ElectionStatus(str, enum.Enum):
-    DRAFT = "draft"
-    ACTIVE = "active"
-    CLOSED = "closed"
-
-
-class UserRole(str, enum.Enum):
-    VOTER = "voter"
-    ADMIN = "admin"
+def utcnow() -> datetime:
+    """Aware UTC (datetime.utcnow() повертає naive і залежить від TZ сервера)."""
+    return datetime.now(timezone.utc)
 
 
 class User(Base):
@@ -47,6 +48,17 @@ class Election(Base):
     starts_at = Column(DateTime(timezone=True), nullable=False)
     ends_at = Column(DateTime(timezone=True), nullable=False)
     created_by = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
+    # Тиждень 6: закриття, підрахунок і публікація результатів
+    closed_at = Column(DateTime(timezone=True), nullable=True)
+    results_published = Column(
+        Boolean, nullable=False, default=False, server_default=false()
+    )
+    results_published_at = Column(DateTime(timezone=True), nullable=True)
+
+    __table_args__ = (
+        CheckConstraint("ends_at > starts_at", name="ck_elections_interval"),
+        Index("ix_elections_status_ends_at", "status", "ends_at"),
+    )
 
     candidates = relationship(
         "Candidate", back_populates="election", cascade="all, delete-orphan"
@@ -83,6 +95,8 @@ class EligibleVoter(Base):
 
     __table_args__ = (
         UniqueConstraint("election_id", "email", name="uq_election_eligible_email"),
+        CheckConstraint("email = lower(email)", name="ck_eligible_voters_email_lower"),
+        Index("ix_eligible_voters_email", "email"),
     )
 
 
@@ -101,7 +115,7 @@ class VoterParticipation(Base):
     user_id = Column(
         UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True
     )
-    voted_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
+    voted_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
 
     __table_args__ = (
         UniqueConstraint("election_id", "user_id", name="uq_user_election_vote"),
@@ -121,4 +135,38 @@ class Ballot(Base):
     )
     candidate_id = Column(
         UUID(as_uuid=True), ForeignKey("candidates.id"), nullable=False, index=True
+    )
+
+    __table_args__ = (
+        Index("ix_ballots_election_candidate", "election_id", "candidate_id"),
+    )
+
+
+# Назва кандидата унікальна в межах голосування без урахування регістру
+Index(
+    "uq_candidates_election_name_lower",
+    Candidate.election_id,
+    func.lower(Candidate.name),
+    unique=True,
+)
+
+
+class AuditLog(Base):
+    """Append-only журнал дій організатора та системи.
+
+    Без FK на elections: запис має пережити видалення чернетки.
+    НЕ містить: окремих голосів, email виборців, фактів явки конкретних людей,
+    результатів по кандидатах (лише агрегати). У PostgreSQL UPDATE/DELETE
+    заборонені тригером (див. міграцію week9_data_integrity).
+    """
+
+    __tablename__ = "audit_logs"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    election_id = Column(UUID(as_uuid=True), nullable=True, index=True)
+    actor_user_id = Column(UUID(as_uuid=True), nullable=True)  # NULL = система/таймер
+    action = Column(String(64), nullable=False, index=True)
+    details = Column(JSON().with_variant(JSONB(), "postgresql"), nullable=False, default=dict)
+    created_at = Column(
+        DateTime(timezone=True), nullable=False, default=utcnow, server_default=func.now()
     )

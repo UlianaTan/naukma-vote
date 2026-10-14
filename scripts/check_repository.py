@@ -12,6 +12,7 @@ REQUIRED = (
     "frontend/.env.example", "backend/.env.example",
     "docs/architecture.md", "docs/api-contract.md", "docs/decisions.md",
     "docs/deployment.md", "docs/devops-guide.md", "docs/first-week.md",
+    "docs/database-schema.md", "docs/voting-core-operations.md",
 )
 
 
@@ -44,7 +45,7 @@ def main():
         print(f"ERROR: {error}")
     if errors:
         return 1
-    print("Repository checks passed. Frontend and backend checks run in separate CI jobs.")
+    print("Repository checks passed. Application checks are not configured yet.")
     return 0
 
 
