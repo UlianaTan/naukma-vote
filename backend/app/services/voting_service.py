@@ -25,7 +25,7 @@ from app.schemas.voting import (
     TurnoutOut,
 )
 from app.services.election_service import close_if_expired
-from app.services.tally_service import TallyResult, compute_tally, count_ballots, count_eligible, count_participants
+from app.services.tally_service import TallyResult, compute_tally
 
 
 def is_duplicate_vote_error(exc: IntegrityError) -> bool:
@@ -299,9 +299,17 @@ class VotingService:
         exists = await db.scalar(select(Election.id).where(Election.id == election_id))
         if not exists:
             raise _not_found()
-        eligible = await count_eligible(db, election_id)
-        participants = await count_participants(db, election_id)
-        ballots = await count_ballots(db, election_id)
+        # Один SQL-запит: усі counts бачать однаковий snapshot, навіть якщо
+        # паралельний голос комітиться під час читання явки.
+        counts = await db.execute(select(
+            select(func.count(EligibleVoter.id))
+            .where(EligibleVoter.election_id == election_id).scalar_subquery(),
+            select(func.count(VoterParticipation.id))
+            .where(VoterParticipation.election_id == election_id).scalar_subquery(),
+            select(func.count(Ballot.id))
+            .where(Ballot.election_id == election_id).scalar_subquery(),
+        ))
+        eligible, participants, ballots = counts.one()
         return TurnoutOut(
             election_id=election_id,
             eligible_count=eligible,

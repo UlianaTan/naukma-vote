@@ -58,3 +58,11 @@ mock-авторизацією або локальною БД не стартує
 Ruff: правила E4/E7/E9/F, конфігурація у backend/pyproject.toml.
 CI виконує встановлення, pip check, lint і регресійні тести.
 SQLite тести не звертаються до staging/production PostgreSQL.
+## PostgreSQL regression CI
+
+GitHub Actions використовує окрему PostgreSQL 16 із БД naukma_vote_ci.
+TEST_DATABASE_URL вмикає перевірки паралельності, які локально пропускаються
+без цієї змінної. Кожен тест створює випадкову схему voting_test_*, а потім
+видаляє лише її. Публічні таблиці не очищаються. Назва тестової БД має
+закінчуватися на _test або _ci. Міграції upgrade head та alembic check
+перевіряються окремо в CI після тестів.
