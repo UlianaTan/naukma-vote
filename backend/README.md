@@ -60,7 +60,9 @@ CI виконує встановлення, pip check, lint і регресій�
 SQLite тести не звертаються до staging/production PostgreSQL.
 ## PostgreSQL regression CI
 
-GitHub Actions використовує окрему PostgreSQL 16 із БД naukma_vote_ci.
+GitHub Actions використовує окрему PostgreSQL 18 із БД naukma_vote_ci,
+щоб major-версія відповідала Neon staging (PostgreSQL 18).
+Для локальних PostgreSQL-перевірок також використовуйте версію 18.
 TEST_DATABASE_URL вмикає перевірки паралельності, які локально пропускаються
 без цієї змінної. Кожен тест створює випадкову схему voting_test_*, а потім
 видаляє лише її. Публічні таблиці не очищаються. Назва тестової БД має
