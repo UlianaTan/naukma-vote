@@ -30,23 +30,48 @@ depends_on: Union[str, Sequence[str], None] = None
 
 def upgrade() -> None:
     # --- Підготовка наявних даних ---
-    # 1) прибрати дублікати email, що відрізняються лише регістром (лишаємо один)
-    op.execute(
-        "DELETE FROM eligible_voters a USING eligible_voters b "
-        "WHERE a.election_id = b.election_id AND lower(a.email) = lower(b.email) AND a.id > b.id"
-    )
+    # 1) прибрати дублікати email, що відрізняються лише регістром (залишити один)
+    conn = op.get_bind()
+    dialect = conn.dialect.name
+
+    if dialect == "postgresql":
+        op.execute(
+            "DELETE FROM eligible_voters a USING eligible_voters b "
+            "WHERE a.election_id = b.election_id AND lower(a.email) = lower(b.email) AND a.id > b.id"
+        )
+    else:
+        # sqlite: видалити всі рядки, які не є мінімальним id в групі (election_id, lower(email))
+        op.execute(
+            "DELETE FROM eligible_voters WHERE id NOT IN ("
+            "  SELECT min(id) FROM eligible_voters GROUP BY election_id, lower(email)"
+            ")"
+        )
+
     # 2) привести email до нижнього регістру
     op.execute("UPDATE eligible_voters SET email = lower(email) WHERE email <> lower(email)")
+
     # 3) перейменувати дублікати імен кандидатів (регістронезалежно)
-    op.execute(
-        "UPDATE candidates SET name = left(name, 240) || ' (' || left(id::text, 8) || ')' "
-        "WHERE id IN ("
-        "  SELECT id FROM ("
-        "    SELECT id, row_number() OVER (PARTITION BY election_id, lower(name) ORDER BY id) AS rn "
-        "    FROM candidates"
-        "  ) t WHERE t.rn > 1"
-        ")"
-    )
+    if dialect == "postgresql":
+        op.execute(
+            "UPDATE candidates SET name = left(name, 240) || ' (' || left(id::text, 8) || ')' "
+            "WHERE id IN ("
+            "  SELECT id FROM ("
+            "    SELECT id, row_number() OVER (PARTITION BY election_id, lower(name) ORDER BY id) AS rn "
+            "    FROM candidates"
+            "  ) t WHERE t.rn > 1"
+            ")"
+        )
+    else:
+        # sqlite: використовує substr() замість left(); modern sqlite підтримує window functions
+        op.execute(
+            "UPDATE candidates SET name = substr(name,1,240) || ' (' || substr(id,1,8) || ')' "
+            "WHERE id IN ("
+            "  SELECT id FROM ("
+            "    SELECT id, row_number() OVER (PARTITION BY election_id, lower(name) ORDER BY id) AS rn "
+            "    FROM candidates"
+            "  ) t WHERE t.rn > 1"
+            ")"
+        )
 
     # --- Обмеження та індекси ---
     op.create_check_constraint(
@@ -66,20 +91,29 @@ def upgrade() -> None:
     )
 
     # --- audit_logs: тільки додавання записів ---
-    op.execute(
-        "CREATE FUNCTION audit_logs_append_only() RETURNS trigger AS $$ "
-        "BEGIN RAISE EXCEPTION 'audit_logs is append-only'; END; "
-        "$$ LANGUAGE plpgsql"
-    )
-    op.execute(
-        "CREATE TRIGGER trg_audit_logs_append_only BEFORE UPDATE OR DELETE ON audit_logs "
-        "FOR EACH ROW EXECUTE FUNCTION audit_logs_append_only()"
-    )
+    if dialect == "postgresql":
+        op.execute(
+            "CREATE FUNCTION audit_logs_append_only() RETURNS trigger AS $$ "
+            "BEGIN RAISE EXCEPTION 'audit_logs is append-only'; END; "
+            "$$ LANGUAGE plpgsql"
+        )
+        op.execute(
+            "CREATE TRIGGER trg_audit_logs_append_only BEFORE UPDATE OR DELETE ON audit_logs "
+            "FOR EACH ROW EXECUTE FUNCTION audit_logs_append_only()"
+        )
+    else:
+        # SQLite fallback: просто leave append-only behavior to app layer; this migration isn't required for local dev.
+        pass
 
 
 def downgrade() -> None:
-    op.execute("DROP TRIGGER IF EXISTS trg_audit_logs_append_only ON audit_logs")
-    op.execute("DROP FUNCTION IF EXISTS audit_logs_append_only()")
+    conn = op.get_bind()
+    dialect = conn.dialect.name
+
+    if dialect == "postgresql":
+        op.execute("DROP TRIGGER IF EXISTS trg_audit_logs_append_only ON audit_logs")
+        op.execute("DROP FUNCTION IF EXISTS audit_logs_append_only()")
+
     op.drop_index('ix_ballots_election_candidate', table_name='ballots')
     op.drop_index('ix_elections_status_ends_at', table_name='elections')
     op.drop_constraint('ck_elections_interval', 'elections', type_='check')
