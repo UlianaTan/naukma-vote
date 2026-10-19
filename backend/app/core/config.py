@@ -39,6 +39,12 @@ class Settings:
     closer_interval_seconds: float
     allowed_email_domain: str
     database_url: str
+    session_secret: str
+    access_expires_seconds: int
+    refresh_expires_seconds: int
+    google_client_id: str
+    google_client_secret: str
+    google_redirect_uri: str
 
     @property
     def is_production(self) -> bool:
@@ -63,6 +69,12 @@ def get_settings() -> Settings:
         closer_interval_seconds=max(1.0, _env_float("ELECTION_CLOSER_INTERVAL_SECONDS", 5.0)),
         allowed_email_domain=os.getenv("ALLOWED_EMAIL_DOMAIN", "ukma.edu.ua").strip().lstrip("@").lower(),
         database_url=os.getenv("DATABASE_URL", ""),
+        session_secret=os.getenv("SESSION_SECRET", ""),
+        access_expires_seconds=int(os.getenv("ACCESS_EXPIRES_SECONDS", "900")),
+        refresh_expires_seconds=int(os.getenv("REFRESH_EXPIRES_SECONDS", "2592000")),
+        google_client_id=os.getenv("GOOGLE_CLIENT_ID", ""),
+        google_client_secret=os.getenv("GOOGLE_CLIENT_SECRET", ""),
+        google_redirect_uri=os.getenv("GOOGLE_REDIRECT_URI", ""),
     )
 
 
@@ -84,4 +96,11 @@ def production_problems(settings: Settings) -> list[str]:
             problems.append(f"FRONTEND_ORIGIN має бути https: {origin}")
     if not settings.closer_enabled:
         problems.append("ELECTION_CLOSER_ENABLED=false: таймер закриття вимкнено")
+    if not settings.session_secret:
+        problems.append("SESSION_SECRET не задано")
+    # GOOGLE keys are optional; if frontend expects google auth in production, these must be set
+    if settings.google_client_id == "" or settings.google_client_secret == "":
+        problems.append("GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET не задані")
+    if settings.google_redirect_uri == "":
+        problems.append("GOOGLE_REDIRECT_URI не задано")
     return problems

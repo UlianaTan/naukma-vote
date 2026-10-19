@@ -2,7 +2,7 @@ import asyncio
 import logging
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request, Response, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 
@@ -13,6 +13,10 @@ from app.core.config import get_settings, production_problems
 from app.database import AsyncSessionLocal, engine
 from app.services.closer import run_closer_loop
 from app.models.voting import Base as ModelsBase
+from app.middleware.csrf import csrf_protect
+
+from prometheus_client import Counter, Histogram, generate_latest, CONTENT_TYPE_LATEST
+import time
 
 logger = logging.getLogger("naukma.app")
 
@@ -24,12 +28,9 @@ async def lifespan(app: FastAPI):
     # У production небезпечна конфігурація = відмова стартувати (fail fast)
     problems = production_problems(settings)
     if problems:
-        raise RuntimeError(
-            "Небезпечна production-конфігурація: " + "; ".join(problems)
-        )
+        raise RuntimeError("Небезпечна production-конфігурація: " + "; ".join(problems))
 
-    # Для локальної розробки переконаємось, що таблиці створені (без alembic).
-    # У production / CI рекомендується використовувати alembic.
+    # Для локальної розробки: створюємо таблиці з моделей, якщо їх ще нема.
     try:
         async with engine.begin() as conn:
             await conn.run_sync(ModelsBase.metadata.create_all)
@@ -68,8 +69,10 @@ app.add_middleware(
 )
 
 # Роутери
-app.include_router(admin_elections_router)
-app.include_router(elections_router, prefix="/api/v1")
+# Apply CSRF protection dependency globally to admin and voting routers so that
+# mutating requests (POST/PUT/DELETE) require X-CSRF-Token while safe methods are allowed.
+app.include_router(admin_elections_router, dependencies=[Depends(csrf_protect)])
+app.include_router(elections_router, prefix="/api/v1", dependencies=[Depends(csrf_protect)])
 app.include_router(auth_router, prefix="/api/auth")
 
 
@@ -84,13 +87,6 @@ async def health():
     return {"status": "ok"}
 
 
-@app.get("/health/live", tags=["Ops"])
-async def health_live():
-    """Лів-ендпоїнт — процес працює.
-    Використовується для перевірки життєздатності контейнера/процесу."""
-    return {"status": "alive"}
-
-
 @app.get("/health/ready", tags=["Ops"])
 async def health_ready():
     """Готовність: БД відповідає. Деталі помилки не розкриваються."""
@@ -102,4 +98,43 @@ async def health_ready():
         raise HTTPException(status_code=503, detail="Database unavailable")
     return {"status": "ready"}
 
-# Метрики та middleware додаються в окремому модулі під час наступних комітів
+
+# Prometheus metrics and middleware
+HTTP_REQUESTS_TOTAL = Counter(
+    "http_requests_total", "Total HTTP requests", ["method", "path", "status"]
+)
+HTTP_REQUEST_LATENCY = Histogram(
+    "http_request_duration_seconds", "HTTP request latency", ["method", "path"]
+)
+
+
+@app.middleware("http")
+async def prometheus_middleware(request: Request, call_next):
+    start = time.time()
+    try:
+        response = await call_next(request)
+    except Exception:
+        # ensure exceptions propagate but don't break metrics collection
+        raise
+    latency = time.time() - start
+    try:
+        path = request.url.path
+        method = request.method
+        status = str(response.status_code)
+        HTTP_REQUEST_LATENCY.labels(method=method, path=path).observe(latency)
+        HTTP_REQUESTS_TOTAL.labels(method=method, path=path, status=status).inc()
+    except Exception:
+        pass
+    return response
+
+
+@app.get("/health/live", tags=["Ops"])
+async def health_live():
+    """Лів-ендпоїнт — процес працює."""
+    return {"status": "alive"}
+
+
+@app.get("/metrics")
+async def metrics():
+    data = generate_latest()
+    return Response(content=data, media_type=CONTENT_TYPE_LATEST)
