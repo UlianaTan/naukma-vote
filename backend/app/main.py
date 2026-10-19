@@ -8,9 +8,11 @@ from sqlalchemy import text
 
 from app.api.v1.admin_elections import router as admin_elections_router
 from app.api.v1.elections import router as elections_router
+from app.api.v1.auth import router as auth_router
 from app.core.config import get_settings, production_problems
 from app.database import AsyncSessionLocal, engine
 from app.services.closer import run_closer_loop
+from app.models.voting import Base as ModelsBase
 
 logger = logging.getLogger("naukma.app")
 
@@ -25,6 +27,14 @@ async def lifespan(app: FastAPI):
         raise RuntimeError(
             "Небезпечна production-конфігурація: " + "; ".join(problems)
         )
+
+    # Для локальної розробки переконаємось, що таблиці створені (без alembic).
+    # У production / CI рекомендується використовувати alembic.
+    try:
+        async with engine.begin() as conn:
+            await conn.run_sync(ModelsBase.metadata.create_all)
+    except Exception:
+        logger.exception("Error while creating metadata tables")
 
     stop_event = asyncio.Event()
     closer_task = None
@@ -57,11 +67,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Роутер адміністратора (Тиждень 4)
+# Роутери
 app.include_router(admin_elections_router)
-
-# Роутер публічних виборів та прийому голосів (Тиждень 5)
 app.include_router(elections_router, prefix="/api/v1")
+app.include_router(auth_router, prefix="/api/auth")
 
 
 @app.get("/")
@@ -75,6 +84,13 @@ async def health():
     return {"status": "ok"}
 
 
+@app.get("/health/live", tags=["Ops"])
+async def health_live():
+    """Лів-ендпоїнт — процес працює.
+    Використовується для перевірки життєздатності контейнера/процесу."""
+    return {"status": "alive"}
+
+
 @app.get("/health/ready", tags=["Ops"])
 async def health_ready():
     """Готовність: БД відповідає. Деталі помилки не розкриваються."""
@@ -85,3 +101,5 @@ async def health_ready():
         logger.exception("Перевірка готовності: БД недоступна")
         raise HTTPException(status_code=503, detail="Database unavailable")
     return {"status": "ready"}
+
+# Метрики та middleware додаються в окремому модулі під час наступних комітів
