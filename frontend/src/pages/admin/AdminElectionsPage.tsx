@@ -4,10 +4,12 @@ import { adminApi } from "../../services/adminApi";
 import { Folder } from "lucide-react";
 import toast from 'react-hot-toast';
 
+import type { AdminElection } from "../../services/adminApi";
+
 export function AdminElectionsPage() {
   const navigate = useNavigate();
   
-  const [elections, setElections] = useState<any[]>([]);
+  const [elections, setElections] = useState<AdminElection[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState("Усі");
@@ -22,7 +24,7 @@ export function AdminElectionsPage() {
         const data = await adminApi.getElections();
         setElections(data);
         setError(null);
-      } catch (err: any) {
+      } catch (err) {
         console.error("Помилка завантаження голосувань:", err);
         const errorMessage = "Не вдалося завантажити список голосувань від сервера.";
         setError(errorMessage);
@@ -40,7 +42,7 @@ export function AdminElectionsPage() {
     if (activeTab === "Усі") return true;
     if (activeTab === "Чернетки") return election.status === "draft";
     if (activeTab === "Активні") return election.status === "active";
-    if (activeTab === "Завершені") return election.status === "completed" || election.status === "closed";
+    if (activeTab === "Завершені") return election.status === "closed";
     return true;
   });
 
@@ -53,7 +55,6 @@ export function AdminElectionsPage() {
             <span className="w-1.5 h-1.5 rounded-full bg-[#137333]"></span> Активне
           </span>
         );
-      case "completed":
       case "closed":
         return (
           <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-slate-100 text-slate-600 text-sm font-medium">
@@ -196,7 +197,7 @@ export function AdminElectionsPage() {
                   {renderStatus(election.status)}
                 </div>
                 <div className="col-span-2 text-sm text-slate-500">
-                  {election.votersCount || 0} виборців
+                  Кількість виборців — у моніторингу
                 </div>
                 <div className="col-span-3 flex flex-wrap md:flex-nowrap justify-start md:justify-end gap-2 pt-2 md:pt-0 border-t md:border-t-0 border-slate-100">
                   {election.status === "active" && (
@@ -231,7 +232,7 @@ export function AdminElectionsPage() {
                       </button>
                     </>
                   )}
-                  {(election.status === "completed" || election.status === "closed") && (
+                  {(election.status === "closed") && (
                     <button 
                       onClick={() => navigate(`/admin/results/${election.id}`)}
                       className="bg-white border border-slate-200 text-slate-700 px-4 py-2 rounded-lg text-sm font-medium hover:bg-slate-50"

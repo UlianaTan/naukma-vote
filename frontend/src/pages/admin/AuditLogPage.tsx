@@ -1,4 +1,3 @@
-import React from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { Shield, Clock, FileText } from 'lucide-react';
 

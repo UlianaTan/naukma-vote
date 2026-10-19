@@ -1,4 +1,6 @@
-import React, { useState, useRef, useEffect } from 'react';
+import type { AdminElection } from '../../services/adminApi';
+import type { ChangeEvent } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { adminApi } from '../../services/adminApi';
 import { ConfirmModal } from '../../components/ui/ConfirmModal';
@@ -14,7 +16,7 @@ export const CreateElectionPage = () => {
   const [description, setDescription] = useState('');
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
-  const [electionStatus, setElectionStatus] = useState<'draft' | 'active'>('draft');
+  const [electionStatus, setElectionStatus] = useState<AdminElection['status']>('draft');
 
   // Кандидати (масив об'єктів або рядків)
   const [candidates, setCandidates] = useState<string[]>(['', '']);
@@ -28,12 +30,12 @@ export const CreateElectionPage = () => {
   const [errors, setErrors] = useState<{ title?: string; endDate?: string; candidates?: string }>({});
   const [isPublishModalOpen, setIsPublishModalOpen] = useState(false);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
-  const [isLoadingData, setIsLoadingData] = useState(false);
+  const [loadedElectionId, setLoadedElectionId] = useState<string | null>(null);
+  const isLoadingData = isEditMode && loadedElectionId !== id;
 
   // Підвантаження даних у режимі редагування з бекенду
   useEffect(() => {
     if (isEditMode && id) {
-      setIsLoadingData(true);
       adminApi.getElectionDetail(id)
         .then((data) => {
           setTitle(data.title || '');
@@ -42,14 +44,14 @@ export const CreateElectionPage = () => {
           setEndDate(data.ends_at ? data.ends_at.slice(0, 16) : '');
           setElectionStatus(data.status || 'draft');
           if (data.candidates && data.candidates.length > 0) {
-            setCandidates(data.candidates.map((c: any) => c.name));
+            setCandidates(data.candidates.map((c) => c.name));
           }
         })
         .catch((err) => {
           console.error("Не вдалося завантажити деталі голосування:", err);
         })
         .finally(() => {
-          setIsLoadingData(false);
+          setLoadedElectionId(id);
         });
     }
   }, [id, isEditMode]);
@@ -88,7 +90,7 @@ export const CreateElectionPage = () => {
     reader.readAsText(file);
   };
 
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileChange = (e: ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
       processFile(e.target.files[0]);
     }

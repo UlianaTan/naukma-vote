@@ -1,4 +1,3 @@
-import React from 'react';
 import { AlertTriangle, Lock, Trash2, X } from 'lucide-react';
 
 interface ConfirmModalProps {

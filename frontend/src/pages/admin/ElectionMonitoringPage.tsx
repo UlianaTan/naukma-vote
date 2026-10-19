@@ -1,4 +1,5 @@
-import React, { useState, useEffect } from 'react';
+import type { AdminElection, ElectionTurnout } from '../../services/adminApi';
+import { useState, useEffect } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { Users, ShieldCheck } from 'lucide-react';
 import { adminApi } from '../../services/adminApi';
@@ -8,8 +9,8 @@ export function ElectionMonitoringPage() {
   const navigate = useNavigate();
   const { id } = useParams();
 
-  const [election, setElection] = useState<any>(null);
-  const [turnout, setTurnout] = useState<any>(null);
+  const [election, setElection] = useState<AdminElection | null>(null);
+  const [turnout, setTurnout] = useState<ElectionTurnout | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isCloseModalOpen, setIsCloseModalOpen] = useState(false);
 

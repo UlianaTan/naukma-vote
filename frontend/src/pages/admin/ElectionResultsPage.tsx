@@ -1,4 +1,5 @@
-import React, { useState, useEffect } from 'react';
+import type { AdminElectionResults } from '../../services/adminApi';
+import { useState, useEffect } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { Download, Users } from 'lucide-react';
 import { adminApi } from '../../services/adminApi';
@@ -8,7 +9,7 @@ export function ElectionResultsPage() {
   const navigate = useNavigate();
   const { id } = useParams();
 
-  const [resultsData, setResultsData] = useState<any>(null);
+  const [resultsData, setResultsData] = useState<AdminElectionResults | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isPublishModalOpen, setIsPublishModalOpen] = useState(false);
   const [isPublished, setIsPublished] = useState(false);
@@ -34,7 +35,7 @@ export function ElectionResultsPage() {
   const handleExportCSV = async () => {
     if (id) {
       try {
-        const response = await adminApi.checkIntegrity(id); // або виклик експорту
+        await adminApi.checkIntegrity(id); // або виклик експорту
         // Якщо експорт налаштований через пряме посилання:
         window.open(`http://localhost:8000/admin/elections/${id}/results/export.csv`, '_blank');
       } catch (err) {
@@ -66,7 +67,7 @@ export function ElectionResultsPage() {
   const totalVoters = resultsData?.eligible_count || 50;
   const votedCount = resultsData?.participants_count || 0;
   const turnoutPercentage = resultsData?.turnout_percent || Math.round((votedCount / totalVoters) * 100);
-  const candidates = resultsData?.candidates || [];
+  const candidates = resultsData?.results || [];
 
   return (
     <div className="flex flex-col w-full">
@@ -79,7 +80,7 @@ export function ElectionResultsPage() {
         </button>
         <div className="flex items-center gap-4">
           <h1 className="text-[32px] font-bold text-slate-900 leading-tight">
-            {resultsData?.election_title || "Вибори"}
+            {resultsData?.title || "Вибори"}
           </h1>
           <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-slate-100 text-slate-600 text-sm font-medium">
             <span className="w-1.5 h-1.5 rounded-full bg-slate-500"></span> Завершено
@@ -147,20 +148,20 @@ export function ElectionResultsPage() {
         </p>
 
         <div className="space-y-6">
-          {candidates.map((candidate: any) => (
-            <div key={candidate.id}>
+          {candidates.map((candidate) => (
+            <div key={candidate.candidate_id}>
               <div className="flex justify-between items-center mb-2">
                 <span className="font-bold text-slate-900 text-base">
                   {candidate.name}
                 </span>
                 <span className="font-bold text-slate-900 text-lg">
-                  {candidate.percentage || 0}% ({candidate.votes || 0} голосів)
+                  {candidate.percent || 0}% ({candidate.votes_count || 0} голосів)
                 </span>
               </div>
               <div className="relative w-full bg-slate-100 rounded-full h-3.5 overflow-hidden">
                 <div 
                   className="absolute top-0 left-0 h-full bg-[#334155] rounded-full transition-all duration-1000"
-                  style={{ width: `${candidate.percentage || 0}%` }}
+                  style={{ width: `${candidate.percent || 0}%` }}
                 />
               </div>
             </div>

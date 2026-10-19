@@ -12,7 +12,6 @@ import VotersManagementPage from './pages/admin/VotersManagementPage';
 import { ElectionMonitoringPage } from './pages/admin/ElectionMonitoringPage';
 import { ElectionResultsPage } from './pages/admin/ElectionResultsPage';
 import { AuditLogPage } from './pages/admin/AuditLogPage';
-import toast from 'react-hot-toast';
 
 function ProtectedVoterRoute({ children }: { children: React.ReactNode }) {
   const { user, isLoading } = useAuth();

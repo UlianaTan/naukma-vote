@@ -1,5 +1,52 @@
 import axios from 'axios';
 
+/** UUIDs and ISO 8601 dates are serialized as strings by the backend. */
+export interface AdminCandidate {
+  id: string;
+  election_id: string;
+  name: string;
+  description: string | null;
+}
+
+export interface AdminElection {
+  id: string;
+  title: string;
+  description: string | null;
+  status: 'draft' | 'active' | 'closed';
+  starts_at: string;
+  ends_at: string;
+  created_by: string;
+  closed_at: string | null;
+  results_published: boolean;
+  results_published_at: string | null;
+  candidates: AdminCandidate[];
+}
+
+export interface ElectionTurnout {
+  election_id: string;
+  eligible_count: number;
+  participants_count: number;
+  turnout_percent: number;
+  consistent: boolean;
+}
+
+export interface CandidateResult {
+  candidate_id: string;
+  name: string;
+  votes_count: number;
+  percent: number;
+}
+
+export interface AdminElectionResults extends ElectionTurnout {
+  title: string;
+  total_votes: number;
+  outcome: 'no_votes' | 'winner' | 'tie';
+  winner_ids: string[];
+  closed_at: string | null;
+  results: CandidateResult[];
+  results_published: boolean;
+}
+
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
 const api = axios.create({
@@ -23,12 +70,12 @@ export const adminApi = {
   },
 
   getElections: async () => {
-    const response = await api.get('/admin/elections');
+    const response = await api.get<AdminElection[]>('/admin/elections');
     return response.data;
   },
 
   getElectionDetail: async (electionId: string) => {
-    const response = await api.get(`/admin/elections/${electionId}`);
+    const response = await api.get<AdminElection>(`/admin/elections/${electionId}`);
     return response.data;
   },
 
@@ -93,12 +140,12 @@ export const adminApi = {
   },
 
   getTurnout: async (electionId: string) => {
-    const response = await api.get(`/admin/elections/${electionId}/turnout`);
+    const response = await api.get<ElectionTurnout>(`/admin/elections/${electionId}/turnout`);
     return response.data;
   },
 
   getAdminResults: async (electionId: string) => {
-    const response = await api.get(`/admin/elections/${electionId}/results`);
+    const response = await api.get<AdminElectionResults>(`/admin/elections/${electionId}/results`);
     return response.data;
   },
 
