@@ -55,9 +55,13 @@ export function ElectionMonitoringPage() {
     );
   }
 
-  const totalVoters = turnout?.eligible_count || 50;
-  const votedCount = turnout?.participants_count || 0;
-  const turnoutPercentage = turnout?.turnout_percent || (totalVoters > 0 ? Math.round((votedCount / totalVoters) * 100) : 0);
+  if (!election || !turnout) {
+    return <div role="alert" className="p-8 text-red-700">Не вдалося завантажити дані голосування. Перевірте доступ і спробуйте оновити сторінку.</div>;
+  }
+
+  const totalVoters = turnout?.eligible_count ?? 0;
+  const votedCount = turnout?.participants_count ?? 0;
+  const turnoutPercentage = turnout.turnout_percent;
 
   return (
     <div className="flex flex-col w-full">

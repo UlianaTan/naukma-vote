@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { API_BASE_URL } from '../lib/api';
 
 /** UUIDs and ISO 8601 dates are serialized as strings by the backend. */
 export interface AdminCandidate {
@@ -47,10 +48,17 @@ export interface AdminElectionResults extends ElectionTurnout {
   results_published: boolean;
 }
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+export interface AuditEntry {
+  id: string;
+  election_id: string | null;
+  actor_user_id: string | null;
+  action: string;
+  details: Record<string, unknown>;
+  created_at: string;
+}
 
 const api = axios.create({
-  baseURL: API_URL,
+  baseURL: API_BASE_URL,
   withCredentials: true, 
   headers: {
     'Content-Type': 'application/json',
@@ -105,8 +113,14 @@ export const adminApi = {
   },
 
   getVoters: async (electionId: string) => {
-    const response = await api.get(`/admin/elections/${electionId}/voters`);
-    return response.data;
+    const voters: { id: string; email: string }[] = [];
+    for (let offset = 0; ; offset += 1000) {
+      const response = await api.get<{ id: string; email: string }[]>(`/admin/elections/${electionId}/voters`, {
+        params: { limit: 1000, offset },
+      });
+      voters.push(...response.data);
+      if (response.data.length < 1000) return voters;
+    }
   },
 
   addVotersBatch: async (electionId: string, emails: string[]) => {
@@ -149,8 +163,17 @@ export const adminApi = {
     return response.data;
   },
 
-  getAuditLog: async (electionId: string) => {
-    const response = await api.get(`/admin/elections/${electionId}/audit`);
+  exportResults: async (electionId: string) => {
+    const response = await api.get<Blob>(`/admin/elections/${electionId}/results/export.csv`, {
+      responseType: 'blob',
+    });
+    return response.data;
+  },
+
+  getAuditLog: async (electionId: string, offset = 0) => {
+    const response = await api.get<AuditEntry[]>(`/admin/elections/${electionId}/audit`, {
+      params: { offset, limit: 100 },
+    });
     return response.data;
   },
 

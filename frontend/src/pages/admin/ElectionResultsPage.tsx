@@ -35,11 +35,16 @@ export function ElectionResultsPage() {
   const handleExportCSV = async () => {
     if (id) {
       try {
-        await adminApi.checkIntegrity(id); // або виклик експорту
-        // Якщо експорт налаштований через пряме посилання:
-        window.open(`http://localhost:8000/admin/elections/${id}/results/export.csv`, '_blank');
+        const blob = await adminApi.exportResults(id);
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = `election-${id}-results.csv`;
+        link.click();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
       } catch (err) {
         console.error("Помилка експорту CSV:", err);
+        alert("Не вдалося завантажити CSV. Спробуйте ще раз.");
       }
     }
   };
@@ -64,9 +69,13 @@ export function ElectionResultsPage() {
     );
   }
 
-  const totalVoters = resultsData?.eligible_count || 50;
-  const votedCount = resultsData?.participants_count || 0;
-  const turnoutPercentage = resultsData?.turnout_percent || Math.round((votedCount / totalVoters) * 100);
+  if (!resultsData) {
+    return <div role="alert" className="p-8 text-red-700">Не вдалося завантажити дані голосування. Перевірте доступ і спробуйте оновити сторінку.</div>;
+  }
+
+  const totalVoters = resultsData?.eligible_count ?? 0;
+  const votedCount = resultsData?.participants_count ?? 0;
+  const turnoutPercentage = resultsData.turnout_percent;
   const candidates = resultsData?.results || [];
 
   return (

@@ -37,7 +37,7 @@ export default function AdminLayout() {
 
           <div className="flex flex-col text-left sm:text-right">
             <span className="text-sm font-bold text-slate-900 leading-tight">admin</span>
-            <span className="text-xs text-slate-500 leading-tight truncate max-w-[160px] sm:max-w-none">admin@ukma.edu.ua</span>
+            <span className="text-xs text-slate-500 leading-tight truncate max-w-[160px] sm:max-w-none">Панель організатора</span>
           </div>
 
           <button 
