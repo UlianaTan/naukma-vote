@@ -1,8 +1,9 @@
-from fastapi import APIRouter, Depends, HTTPException, Response, status, Cookie
+from fastapi import APIRouter, Depends, HTTPException, Response, status, Cookie, Query
 from fastapi.responses import RedirectResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 import httpx
+import urllib.parse
 
 from app.database import get_db
 from app.models.voting import User
@@ -50,11 +51,27 @@ async def login(response: Response, db: AsyncSession = Depends(get_db), x_user_i
 
 
 @router.get("/google/login")
-async def google_login():
+async def google_login(next: str | None = Query(None)):
+    """Redirects user to Google OAuth consent screen.
+
+    Optional `next` param (frontend URL) will be used as post-login redirect.
+    """
     settings = get_settings()
     if not settings.google_client_id or not settings.google_redirect_uri:
         raise HTTPException(status_code=500, detail="Google OAuth not configured")
-    state = secrets.token_urlsafe(16)
+
+    # Determine redirect target after callback — must be one of configured frontend_origins
+    frontend_origins = tuple(settings.frontend_origins)
+    default_redirect = frontend_origins[0] if frontend_origins else "/"
+    redirect_target = next or default_redirect
+    # Validate redirect_target is allowed origin
+    parsed = urllib.parse.urlparse(redirect_target)
+    origin = f"{parsed.scheme}://{parsed.netloc}" if parsed.scheme and parsed.netloc else ""
+    if origin not in frontend_origins:
+        # fallback to default
+        redirect_target = default_redirect
+
+    state = secrets.token_urlsafe(32)
     params = {
         "client_id": settings.google_client_id,
         "redirect_uri": settings.google_redirect_uri,
@@ -64,15 +81,17 @@ async def google_login():
         "prompt": "consent",
         "state": state,
     }
-    # store state in a short-lived cookie to validate on callback
     url = httpx.URL("https://accounts.google.com/o/oauth2/v2/auth").copy_merge_params(params)
-    resp = RedirectResponse(url)
-    resp.set_cookie("oauth_state", state, httponly=True, samesite="lax", secure=get_settings().is_production)
+    resp = RedirectResponse(str(url))
+    # store state and next in short-lived cookies (httponly)
+    secure = settings.is_production
+    resp.set_cookie("oauth_state", state, httponly=True, samesite="lax", secure=secure)
+    resp.set_cookie("oauth_next", redirect_target, httponly=True, samesite="lax", secure=secure)
     return resp
 
 
 @router.get("/google/callback")
-async def google_callback(code: str | None = None, state: str | None = None, oauth_state: str | None = Cookie(None), db: AsyncSession = Depends(get_db)):
+async def google_callback(code: str | None = None, state: str | None = None, oauth_state: str | None = Cookie(None), oauth_next: str | None = Cookie(None), db: AsyncSession = Depends(get_db)):
     settings = get_settings()
     if not code or not state:
         raise HTTPException(status_code=400, detail="Missing code or state")
@@ -138,14 +157,23 @@ async def google_callback(code: str | None = None, state: str | None = None, oau
     access = create_access_token(str(user.id))
     refresh = await create_refresh_token(db, str(user.id))
 
-    response = Response(content="OK")
+    # Determine redirect target (validate against allowed origins)
+    redirect_target = oauth_next or (tuple(settings.frontend_origins)[0] if settings.frontend_origins else "/")
+    parsed = urllib.parse.urlparse(redirect_target)
+    origin = f"{parsed.scheme}://{parsed.netloc}" if parsed.scheme and parsed.netloc else ""
+    frontend_origins = tuple(settings.frontend_origins)
+    if origin not in frontend_origins:
+        redirect_target = frontend_origins[0] if frontend_origins else "/"
+
+    response = RedirectResponse(url=redirect_target)
     secure = settings.is_production
     response.set_cookie("access_token", access, httponly=True, samesite="lax", secure=secure)
     response.set_cookie("refresh_token", refresh, httponly=True, samesite="lax", secure=secure)
     csrf = "csrf-" + str(secrets.token_urlsafe(16))
     response.set_cookie("csrf_token", csrf, httponly=False, samesite="lax", secure=secure)
-    # Clear oauth_state cookie
+    # Clear oauth_state and oauth_next cookies
     response.delete_cookie("oauth_state")
+    response.delete_cookie("oauth_next")
     return response
 
 
