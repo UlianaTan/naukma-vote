@@ -1,5 +1,5 @@
 import axios, { type InternalAxiosRequestConfig } from 'axios';
-import { ApiError, canRefresh, getCsrfToken, isMutation, refreshSession, sessionExpired, sessionVersion } from '../lib/session';
+import { ApiError, canRefresh, getCsrfToken, isMutation, refreshSession, sessionExpired, sessionVersion, sessionEpoch, assertSessionEpoch, isCsrfMismatch, invalidateCsrfToken } from '../lib/session';
 import { API_BASE_URL } from '../lib/api';
 
 /** UUIDs and ISO 8601 dates are serialized as strings by the backend. */
@@ -67,26 +67,41 @@ const api = axios.create({
 });
 
 // Both API clients share CSRF retrieval and a single in-flight refresh.
-type SessionConfig = InternalAxiosRequestConfig & { sessionRetry?: boolean; sessionVersion?: number };
+type SessionConfig = InternalAxiosRequestConfig & { sessionRetry?: boolean; sessionVersion?: number; sessionEpoch?: number; csrfRetry?: boolean };
 api.interceptors.request.use(async (config: SessionConfig) => {
+  config.sessionEpoch ??= sessionEpoch();
+  assertSessionEpoch(config.sessionEpoch);
   config.sessionVersion = sessionVersion();
   try {
     if (isMutation(config.method)) config.headers.set('X-CSRF-Token', await getCsrfToken());
   } catch (error) {
+    assertSessionEpoch(config.sessionEpoch);
     if (error instanceof ApiError && error.status === 401) sessionExpired();
     throw error;
   }
+  assertSessionEpoch(config.sessionEpoch);
   return config;
 });
-api.interceptors.response.use(response => response, async (error: unknown) => {
-  if (!axios.isAxiosError(error) || !error.config || error.response?.status !== 401) throw error;
+api.interceptors.response.use(response => {
+  assertSessionEpoch((response.config as SessionConfig).sessionEpoch ?? sessionEpoch());
+  return response;
+}, async (error: unknown) => {
+  if (!axios.isAxiosError(error) || !error.config) throw error;
   const config = error.config as SessionConfig;
+  assertSessionEpoch(config.sessionEpoch ?? sessionEpoch());
+  if (isMutation(config.method) && !config.csrfRetry && isCsrfMismatch(error.response?.status ?? 0, error.response?.data)) {
+    config.csrfRetry = true;
+    invalidateCsrfToken(String(config.headers.get('X-CSRF-Token') || '') || null);
+    return api.request(config);
+  }
+  if (error.response?.status !== 401) throw error;
   if (config.sessionRetry || !canRefresh(config.url || '')) {
     sessionExpired();
     throw error;
   }
   config.sessionRetry = true;
   await refreshSession(config.sessionVersion ?? sessionVersion());
+  assertSessionEpoch(config.sessionEpoch ?? sessionEpoch());
   return api.request(config);
 });
 

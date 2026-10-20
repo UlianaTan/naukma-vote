@@ -14,8 +14,14 @@ import { ElectionResultsPage } from './pages/admin/ElectionResultsPage';
 import { AuditLogPage } from './pages/admin/AuditLogPage';
 
 function ProtectedVoterRoute({ children }: { children: React.ReactNode }) {
-  const { user, isLoading } = useAuth();
+  const { user, isLoading, sessionError, retrySession } = useAuth();
   if (isLoading) return null;
+  if (sessionError) return (
+    <div className="max-w-md mx-auto p-6 space-y-4">
+      <p role="alert">{sessionError}</p>
+      <button onClick={retrySession} className="underline">Повторити перевірку сесії</button>
+    </div>
+  );
   if (!user) return <Navigate to="/login" replace />;
   return <>{children}</>;
 }

@@ -83,7 +83,9 @@ CI читає цей самий файл. Пакети фіксує package-lock
 
 All requests include credentials. Fetch and Axios share CSRF retrieval through
 `/api/auth/csrf` and a single refresh request after a 401. Mutation requests send
-`X-CSRF-Token`. A 403 is shown as an access/CSRF error and never refreshes the session.
+`X-CSRF-Token`. An ordinary 403 is never retried and never triggers refresh. Only a recognized
+CSRF mismatch reloads CSRF and retries the rejected mutation once. Refresh uses
+the same bounded CSRF repair and clears identity only for 401, not 403.
 Refresh failure with 401/403 clears the current identity so protected routes show login.
 CSV downloads still use Axios blob responses. No access/refresh tokens are stored
 in localStorage or exposed to JavaScript.
@@ -91,3 +93,10 @@ in localStorage or exposed to JavaScript.
 Run `npm test` (Node 24) for CSRF, parallel refresh, retry limits, network failure
 and shared Axios/fetch session tests. These mocked transport tests do not replace
 Google OAuth and cookie-policy verification in real staging browsers.
+
+Initial `/me` network/5xx failures show a retryable session-check error rather than
+redirecting to login. Logout errors are visible in both management and voter views.
+If CSRF bootstrap returns 401, logout still reaches the backend, which verifies the
+browser's exact trusted Origin before revoking refresh and clearing cookies.
+Session clearing invalidates pending requests and CSRF cache writes. These checks
+protect frontend state; they do not add immediate revocation of copied access JWTs.

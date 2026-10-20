@@ -21,3 +21,17 @@ async def csrf_protect(request: Request) -> None:
     origin = request.headers.get('origin')
     if origin and origin not in get_settings().frontend_origins:
         raise HTTPException(status_code=403, detail='Origin not allowed')
+
+
+async def logout_csrf_protect(request: Request) -> None:
+    """Allow logout from an explicitly trusted browser origin even after expiry.
+
+    Without Origin, require the normal CSRF pair. Never allow an untrusted Origin,
+    including a request carrying an otherwise valid CSRF pair.
+    """
+    origin = request.headers.get('origin')
+    if origin:
+        if origin not in get_settings().frontend_origins:
+            raise HTTPException(status_code=403, detail='Origin not allowed')
+        return
+    await csrf_protect(request)

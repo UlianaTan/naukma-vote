@@ -87,7 +87,10 @@ TEST_DATABASE_URL вмикає перевірки паралельності, я
 It requires a valid refresh cookie (also works after access expiry), reuses an existing
 CSRF cookie and rejects an explicitly disallowed Origin. Access/refresh secrets are
 never returned in JSON. The CSRF cookie is HttpOnly as well: frontend uses this endpoint.
-Send `X-CSRF-Token` on POST/PATCH/PUT/DELETE, including refresh and logout.
+Send `X-CSRF-Token` on POST/PATCH/PUT/DELETE, including refresh.
+Logout also accepts an exact trusted FRONTEND_ORIGIN when CSRF bootstrap is
+unavailable after refresh expiry. Without Origin it requires matching CSRF;
+untrusted/null Origin is always rejected, even with valid CSRF.
 The backend still verifies ownership independently of CSRF.
 
 Cookies are host-only, Path=/, HttpOnly. Local uses SameSite=Lax without Secure;

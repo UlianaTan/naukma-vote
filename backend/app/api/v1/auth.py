@@ -13,7 +13,7 @@ from app.core.cookies import set_session_cookie, set_session_cookies, set_csrf_c
 from app.core.jwt import create_access_token
 from app.core.dependencies import get_current_user
 from app.core.config import get_settings
-from app.middleware.csrf import csrf_protect
+from app.middleware.csrf import csrf_protect, logout_csrf_protect
 from app.services.google_oauth import OAuthFailure, validate_profile, resolve_google_user
 
 import uuid
@@ -212,7 +212,7 @@ async def refresh(response: Response, refresh_token: str | None = Cookie(None), 
     return {"status": "ok"}
 
 
-@router.post("/logout", dependencies=[Depends(csrf_protect)])
+@router.post("/logout", dependencies=[Depends(logout_csrf_protect)])
 async def logout(response: Response, refresh_token: str | None = Cookie(None), db: AsyncSession = Depends(get_db)):
     if refresh_token:
         await revoke_refresh_token(db, refresh_token)
