@@ -1,4 +1,5 @@
-import axios from 'axios';
+import axios, { type InternalAxiosRequestConfig } from 'axios';
+import { ApiError, canRefresh, getCsrfToken, isMutation, refreshSession, sessionExpired, sessionVersion } from '../lib/session';
 import { API_BASE_URL } from '../lib/api';
 
 /** UUIDs and ISO 8601 dates are serialized as strings by the backend. */
@@ -63,6 +64,30 @@ const api = axios.create({
   headers: {
     'Content-Type': 'application/json',
   },
+});
+
+// Both API clients share CSRF retrieval and a single in-flight refresh.
+type SessionConfig = InternalAxiosRequestConfig & { sessionRetry?: boolean; sessionVersion?: number };
+api.interceptors.request.use(async (config: SessionConfig) => {
+  config.sessionVersion = sessionVersion();
+  try {
+    if (isMutation(config.method)) config.headers.set('X-CSRF-Token', await getCsrfToken());
+  } catch (error) {
+    if (error instanceof ApiError && error.status === 401) sessionExpired();
+    throw error;
+  }
+  return config;
+});
+api.interceptors.response.use(response => response, async (error: unknown) => {
+  if (!axios.isAxiosError(error) || !error.config || error.response?.status !== 401) throw error;
+  const config = error.config as SessionConfig;
+  if (config.sessionRetry || !canRefresh(config.url || '')) {
+    sessionExpired();
+    throw error;
+  }
+  config.sessionRetry = true;
+  await refreshSession(config.sessionVersion ?? sessionVersion());
+  return api.request(config);
 });
 
 export const adminApi = {

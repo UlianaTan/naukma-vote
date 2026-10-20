@@ -1,5 +1,6 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
 import { api, ApiError } from "../../../lib/api";
+import { API_BASE_URL, SESSION_EXPIRED_EVENT } from "../../../lib/session";
 import type { User } from "../types";
 
 interface AuthContextValue {
@@ -18,15 +19,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    const expired = () => setUser(null);
+    window.addEventListener(SESSION_EXPIRED_EVENT, expired);
     api
       .get<User>("/api/auth/me")
       .then(setUser)
       .catch(() => setUser(null))
       .finally(() => setIsLoading(false));
+    return () => window.removeEventListener(SESSION_EXPIRED_EVENT, expired);
   }, []);
 
   function login() {
-    window.location.href = `${import.meta.env.VITE_API_BASE_URL || "http://localhost:8000"}/api/auth/google/login`;
+    window.location.href = `${API_BASE_URL}/api/auth/google/login`;
   }
 
   async function logout() {

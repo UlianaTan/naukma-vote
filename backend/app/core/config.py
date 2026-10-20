@@ -47,6 +47,19 @@ class Settings:
     google_redirect_uri: str
 
     @property
+    def cookie_secure(self) -> bool:
+        return self.app_env != "local"
+
+    @property
+    def cookie_samesite(self) -> str:
+        value = os.getenv("SESSION_COOKIE_SAMESITE", "lax" if self.app_env == "local" else "none").lower()
+        if value not in {"lax", "strict", "none"}:
+            raise ValueError("SESSION_COOKIE_SAMESITE must be lax, strict or none")
+        if value == "none" and not self.cookie_secure:
+            raise ValueError("SameSite=None requires HTTPS (Secure cookies)")
+        return value
+
+    @property
     def is_production(self) -> bool:
         return self.app_env == "production"
 
@@ -59,7 +72,7 @@ def get_settings() -> Settings:
         for o in os.getenv("FRONTEND_ORIGIN", "").split(",")
         if o.strip()
     )
-    origins = frontend if app_env == "production" else tuple(dict.fromkeys(frontend + LOCAL_ORIGINS))
+    origins = tuple(dict.fromkeys(frontend + LOCAL_ORIGINS)) if app_env == "local" else frontend
     return Settings(
         app_env=app_env,
         frontend_origins=origins,

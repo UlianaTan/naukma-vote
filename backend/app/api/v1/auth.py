@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Response, status, Cookie, Query
+from fastapi import APIRouter, Depends, HTTPException, Response, Request, status, Cookie, Query
 from fastapi.responses import RedirectResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -8,6 +8,7 @@ import urllib.parse
 from app.database import get_db
 from app.models.voting import User
 from app.services.auth_service import create_refresh_token, verify_refresh_token, revoke_refresh_token
+from app.core.cookies import set_session_cookie, set_session_cookies, set_csrf_cookie, clear_session_cookies
 from app.core.jwt import create_access_token
 from app.core.dependencies import get_current_user
 from app.core.config import get_settings
@@ -41,13 +42,7 @@ async def login(response: Response, db: AsyncSession = Depends(get_db), x_user_i
     access = create_access_token(str(user.id))
     refresh = await create_refresh_token(db, str(user.id))
 
-    # set cookies
-    secure = settings.is_production
-    response.set_cookie("access_token", access, httponly=True, samesite="lax", secure=secure)
-    response.set_cookie("refresh_token", refresh, httponly=True, samesite="lax", secure=secure)
-    # csrf token (double-submit) — not httpOnly
-    csrf = "csrf-" + str(uuid.uuid4())
-    response.set_cookie("csrf_token", csrf, httponly=False, samesite="lax", secure=secure)
+    set_session_cookies(response, access, refresh)
 
     return {"status": "ok"}
 
@@ -86,9 +81,9 @@ async def google_login(next: str | None = Query(None)):
     url = httpx.URL("https://accounts.google.com/o/oauth2/v2/auth").copy_merge_params(params)
     resp = RedirectResponse(str(url))
     # store state and next in short-lived cookies (httponly)
-    secure = settings.is_production
-    resp.set_cookie("oauth_state", state, httponly=True, samesite="lax", secure=secure)
-    resp.set_cookie("oauth_next", redirect_target, httponly=True, samesite="lax", secure=secure)
+    secure = settings.cookie_secure
+    resp.set_cookie("oauth_state", state, httponly=True, samesite="lax", secure=secure, max_age=600)
+    resp.set_cookie("oauth_next", redirect_target, httponly=True, samesite="lax", secure=secure, max_age=600)
     return resp
 
 
@@ -168,14 +163,9 @@ async def google_callback(code: str | None = None, state: str | None = None, oau
         redirect_target = frontend_origins[0] if frontend_origins else "/"
 
     response = RedirectResponse(url=redirect_target)
-    secure = settings.is_production
-    response.set_cookie("access_token", access, httponly=True, samesite="lax", secure=secure)
-    response.set_cookie("refresh_token", refresh, httponly=True, samesite="lax", secure=secure)
-    csrf = "csrf-" + str(secrets.token_urlsafe(16))
-    response.set_cookie("csrf_token", csrf, httponly=False, samesite="lax", secure=secure)
-    # Clear oauth_state and oauth_next cookies
-    response.delete_cookie("oauth_state")
-    response.delete_cookie("oauth_next")
+    set_session_cookies(response, access, refresh)
+    response.delete_cookie("oauth_state", secure=settings.cookie_secure, httponly=True, samesite="lax")
+    response.delete_cookie("oauth_next", secure=settings.cookie_secure, httponly=True, samesite="lax")
     return response
 
 
@@ -186,9 +176,11 @@ async def refresh(response: Response, refresh_token: str | None = Cookie(None), 
     rt = await verify_refresh_token(db, refresh_token)
     if not rt:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid refresh token")
+    if not await db.get(User, rt.user_id):
+        raise HTTPException(status_code=401, detail="User not found")
     # Issue new access token
     access = create_access_token(str(rt.user_id))
-    response.set_cookie("access_token", access, httponly=True, samesite="lax", secure=get_settings().is_production)
+    set_session_cookie(response, "access_token", access, get_settings().access_expires_seconds)
     return {"status": "ok"}
 
 
@@ -196,13 +188,27 @@ async def refresh(response: Response, refresh_token: str | None = Cookie(None), 
 async def logout(response: Response, refresh_token: str | None = Cookie(None), db: AsyncSession = Depends(get_db)):
     if refresh_token:
         await revoke_refresh_token(db, refresh_token)
-    # clear cookies
-    response.delete_cookie("access_token")
-    response.delete_cookie("refresh_token")
-    response.delete_cookie("csrf_token")
+    clear_session_cookies(response)
     return {"status": "ok"}
 
 
 @router.get("/me")
-async def me(user: User = Depends(get_current_user)):
+async def me(response: Response, user: User = Depends(get_current_user)):
+    response.headers["Cache-Control"] = "no-store"
     return {"id": str(user.id), "email": user.email, "role": user.role.value}
+
+
+@router.get("/csrf")
+async def csrf_token(request: Request, response: Response, db: AsyncSession = Depends(get_db)):
+    """Bootstrap CSRF even when access expired; token is never an access credential."""
+    response.headers["Cache-Control"] = "no-store"
+    origin = request.headers.get("origin")
+    if origin and origin not in get_settings().frontend_origins:
+        raise HTTPException(status_code=403, detail="Origin not allowed")
+    refresh = await verify_refresh_token(db, request.cookies.get("refresh_token", ""))
+    if not refresh or not await db.get(User, refresh.user_id):
+        raise HTTPException(status_code=401, detail="Invalid refresh token")
+    token = request.cookies.get("csrf_token")
+    if token and len(token) > 256:
+        token = None
+    return {"csrf_token": set_csrf_cookie(response, token)}
