@@ -7,7 +7,8 @@ from sqlalchemy import create_engine, event
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from app.api.v1.admin_elections import create_election_draft, update_election_draft
-from app.core.dependencies import ADMIN_USER_ID, get_current_user
+from support import make_user
+from app.models.enums import UserRole
 from app.models.voting import Base, Election, ElectionStatus
 from app.schemas.admin_elections import ElectionCreate, ElectionUpdate
 from app.services.voting_service import is_duplicate_vote_error
@@ -34,16 +35,16 @@ class DraftTests(unittest.IsolatedAsyncioTestCase):
         self.engine.dispose()
 
     async def test_create_draft_on_empty_database_uses_persisted_admin(self):
-        admin = await get_current_user(db=self.db)
+        admin = make_user(self.session, email="organizer@ukma.edu.ua", role=UserRole.ADMIN)
         now = datetime.now(timezone.utc)
         election = await create_election_draft(ElectionCreate(
             title='Test election', starts_at=now+timedelta(days=1),
             ends_at=now+timedelta(days=2)), self.db, admin)
-        self.assertEqual(election.created_by, ADMIN_USER_ID)
+        self.assertEqual(election.created_by, admin.id)
         self.assertEqual(self.session.get(Election, election.id).created_by, admin.id)
 
     async def test_partial_date_patch_cannot_invert_interval(self):
-        admin = await get_current_user(db=self.db)
+        admin = make_user(self.session, email="organizer@ukma.edu.ua", role=UserRole.ADMIN)
         now = datetime.now(timezone.utc)
         election = Election(id=uuid.uuid4(), title='Test election',
             status=ElectionStatus.DRAFT, created_by=admin.id,

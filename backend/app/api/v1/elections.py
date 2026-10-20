@@ -1,12 +1,11 @@
 import uuid
 from typing import List
-from fastapi import APIRouter, Depends, Header, HTTPException, status
-from sqlalchemy import select
+from fastapi import APIRouter, Depends, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.config import get_settings
+from app.core.dependencies import get_current_user
 from app.database import get_db
-from app.models.voting import User, UserRole
+from app.models.voting import User
 from app.schemas.voting import (
     ElectionOut,
     ElectionResultOut,
@@ -14,77 +13,6 @@ from app.schemas.voting import (
     VoteResponse,
 )
 from app.services.voting_service import VotingService
-
-
-# Тестові профілі для перевірки допуску через заголовок X-User-Id
-DEFAULT_TEST_USER_ID = uuid.UUID("a0000000-0000-0000-0000-000000000001")
-STRANGER_TEST_USER_ID = uuid.UUID("a0000000-0000-0000-0000-000000000002")
-
-MOCK_USERS_REGISTRY = {
-    DEFAULT_TEST_USER_ID: {
-        "email": "test.student@ukma.edu.ua",
-        "role": UserRole.VOTER,
-    },
-    STRANGER_TEST_USER_ID: {
-        "email": "stranger@ukma.edu.ua",
-        "role": UserRole.VOTER,
-    },
-}
-
-
-# Тимчасова мок-авторизація для розробки та Swagger-тестування
-async def get_current_user(
-    x_user_id: str | None = Header(
-        None,
-        description="Mock User UUID для тестів допуску (за замовчуванням дефолтний студент)",
-    ),
-    db: AsyncSession = Depends(get_db),
-) -> User:
-    """
-    Повертає користувача для тестування.
-    Отримує наявного або автоматично створює тестового користувача в БД,
-    щоб забезпечити дійсний Foreign Key для VoterParticipation.
-    """
-    if not get_settings().allow_mock_auth:
-        # У production mock вимкнено: цю залежність має замінити Auth-модуль
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Автентифікацію не налаштовано",
-        )
-    user_uuid = DEFAULT_TEST_USER_ID
-
-    if x_user_id:
-        try:
-            user_uuid = uuid.UUID(x_user_id)
-        except ValueError:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Невалідний UUID у заголовку X-User-Id",
-            )
-
-    # 1. Перевіряємо, чи існує користувач у БД
-    res = await db.execute(select(User).where(User.id == user_uuid))
-    user = res.scalar_one_or_none()
-
-    # 2. Якщо користувача немає — створюємо його в базі
-    if not user:
-        profile = MOCK_USERS_REGISTRY.get(
-            user_uuid,
-            {
-                "email": f"user_{str(user_uuid)[:8]}@ukma.edu.ua",
-                "role": UserRole.VOTER,
-            },
-        )
-        user = User(
-            id=user_uuid,
-            email=profile["email"],
-            role=profile["role"],
-        )
-        db.add(user)
-        await db.commit()
-        await db.refresh(user)
-
-    return user
 
 
 router = APIRouter(prefix="/elections", tags=["Elections & Voting Core"])

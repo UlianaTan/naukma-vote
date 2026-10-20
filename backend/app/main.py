@@ -10,6 +10,7 @@ from app.api.v1.admin_elections import router as admin_elections_router
 from app.api.v1.elections import router as elections_router
 from app.api.v1.auth import router as auth_router
 from app.core.config import get_settings, production_problems
+from app.core.dependencies import get_current_user
 from app.database import AsyncSessionLocal, engine
 from app.services.closer import run_closer_loop
 from app.models.voting import Base as ModelsBase
@@ -69,10 +70,10 @@ app.add_middleware(
 )
 
 # Роутери
-# Apply CSRF protection dependency globally to admin and voting routers so that
-# mutating requests (POST/PUT/DELETE) require X-CSRF-Token while safe methods are allowed.
-app.include_router(admin_elections_router, dependencies=[Depends(csrf_protect)])
-app.include_router(elections_router, prefix="/api/v1", dependencies=[Depends(csrf_protect)])
+# Authenticate before CSRF so requests without a valid session return 401.
+# FastAPI caches the same dependency used by endpoints and role checks.
+app.include_router(admin_elections_router, dependencies=[Depends(get_current_user), Depends(csrf_protect)])
+app.include_router(elections_router, prefix="/api/v1", dependencies=[Depends(get_current_user), Depends(csrf_protect)])
 app.include_router(auth_router, prefix="/api/auth")
 
 
