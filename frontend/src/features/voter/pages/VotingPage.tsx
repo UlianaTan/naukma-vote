@@ -1,113 +1,67 @@
-import { useState } from "react";
-import { useNavigate, useParams, Link } from "react-router-dom";
-import { useElection } from "../hooks/useElection";
-import { useSubmitVote } from "../hooks/useSubmitVote";
+import { useEffect, useState } from 'react';
+import { useNavigate, useParams, Link } from 'react-router-dom';
+import { useElection } from '../hooks/useElection';
+import { useSubmitVote } from '../hooks/useSubmitVote';
+import { electionState, formatElectionDate } from '../electionState';
+import { VoterError, VoterLoading } from '../components/VoterFeedback';
 
 export function VotingPage() {
   const { id } = useParams<{ id: string }>();
+  return <VotingForm key={id} id={id} />;
+}
+
+function VotingForm({ id }: { id: string | undefined }) {
   const navigate = useNavigate();
-  const { election, isLoading, error } = useElection(id);
-  const { submitVote, isSubmitting, error: submitError } = useSubmitVote();
+  const { election, isLoading, error, reload } = useElection(id);
+  const { submitVote, isSubmitting, error: submitError, needsVerification } = useSubmitVote();
   const [selectedCandidateId, setSelectedCandidateId] = useState<string | null>(null);
+  const [now, setNow] = useState(Date.now);
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, []);
 
   async function handleSubmit() {
-    if (!id || !selectedCandidateId) return;
-    try {
-      await submitVote(id, selectedCandidateId);
-      navigate(`/vote/${id}/done`);
-    } catch {
-      // помилка вже збережена в submitError
-    }
+    if (!id || !election || !selectedCandidateId || election.has_voted || electionState(election) !== 'active') return;
+    const accepted = await submitVote(id, selectedCandidateId);
+    if (accepted === true) navigate(`/vote/${id}/done`);
+    else if (accepted === false) reload();
   }
 
-  if (isLoading) {
-    return (
-      <div className="max-w-xl mx-auto px-4 py-8 space-y-4">
-        <div className="h-6 bg-muted rounded w-2/3 animate-pulse" />
-        <div className="h-24 bg-muted rounded animate-pulse" />
-      </div>
-    );
-  }
-
-  if (error || !election) {
-    return (
-      <div className="max-w-xl mx-auto px-4 py-8">
-        <div className="bg-destructive/10 text-destructive rounded-md p-4 text-sm">
-          {error ?? "Голосування не знайдено"}
-        </div>
-        <Link to="/" className="inline-block mt-4 underline text-sm">
-          ← Повернутись до списку
-        </Link>
-      </div>
-    );
-  }
-
-  if (election.status !== "active") {
-    return (
-      <div className="max-w-xl mx-auto px-4 py-8">
-        <div className="bg-muted text-muted-foreground rounded-md p-4 text-sm">
-          Це голосування наразі {election.status === "closed" ? "закрите" : "ще не почалось"}.
-        </div>
-        <Link to="/" className="inline-block mt-4 underline text-sm">
-          ← Повернутись до списку
-        </Link>
-      </div>
-    );
-  }
-
-  return (
-    <div className="max-w-xl mx-auto px-4 py-8">
-      <Link to="/" className="text-sm text-muted-foreground underline">
-        ← Усі голосування
-      </Link>
-
-      <h1 className="text-xl font-semibold mt-4">{election.title}</h1>
-      <p className="text-muted-foreground mt-1">{election.description}</p>
-
-      <fieldset className="mt-6 space-y-3">
-        <legend className="text-sm font-medium mb-2">Оберіть кандидата:</legend>
-        {election.candidates.map((candidate) => (
-          <label
-            key={candidate.id}
-            className={`block border rounded-md p-4 cursor-pointer transition-colors ${
-              selectedCandidateId === candidate.id
-                ? "border-primary bg-accent"
-                : "hover:bg-accent/50"
-            }`}
-          >
+  const state = election ? electionState(election, now) : null;
+  const canVote = election && state === 'active' && !election.has_voted && !needsVerification;
+  return <div className="max-w-xl mx-auto px-4 py-8 space-y-4">
+    <Link to="/" className="text-sm underline">← Усі голосування</Link>
+    {submitError && <p role="alert" className="rounded-md bg-destructive/10 p-3 text-destructive">{submitError}</p>}
+    {needsVerification && <Link to={`/vote/${id}/done`} className="block underline">Перевірити, чи враховано голос</Link>}
+    {isLoading && <VoterLoading />}
+    {error && <VoterError message={error} retry={reload} />}
+    {election && <>
+      <h1 className="text-xl font-semibold">{election.title}</h1>
+      {election.description && <p className="text-muted-foreground">{election.description}</p>}
+      <p className="text-sm text-muted-foreground">Початок: {formatElectionDate(election.starts_at)}<br />Завершення: {formatElectionDate(election.ends_at)}</p>
+      {election.has_voted ? <div className="rounded-md bg-muted p-4">
+        <p>Ви вже проголосували в цьому голосуванні.</p>
+        <Link to={`/vote/${id}/done`} className="underline">Підтвердження участі</Link>
+      </div> : state !== 'active' ? <p className="rounded-md bg-muted p-4">
+        {state === 'upcoming' ? 'Голосування ще не почалося.' : 'Голосування закрите.'}
+      </p> : <>
+        <fieldset disabled={!canVote || isSubmitting} className="space-y-3 disabled:opacity-60">
+          <legend className="text-sm font-medium mb-2">Оберіть кандидата:</legend>
+          {election.candidates.map(candidate => <label key={candidate.id} className={`block border rounded-md p-4 cursor-pointer ${selectedCandidateId === candidate.id ? 'border-primary bg-accent' : ''}`}>
             <div className="flex items-start gap-3">
-              <input
-                type="radio"
-                name="candidate"
-                value={candidate.id}
-                checked={selectedCandidateId === candidate.id}
-                onChange={() => setSelectedCandidateId(candidate.id)}
-                className="mt-1"
-              />
-              <div>
-                <div className="font-medium">{candidate.name}</div>
-                <div className="text-sm text-muted-foreground mt-0.5">
-                  {candidate.description}
-                </div>
-              </div>
+              <input type="radio" name="candidate" value={candidate.id} checked={selectedCandidateId === candidate.id} onChange={() => setSelectedCandidateId(candidate.id)} className="mt-1" />
+              <div><div className="font-medium">{candidate.name}</div>{candidate.description && <div className="text-sm text-muted-foreground">{candidate.description}</div>}</div>
             </div>
-          </label>
-        ))}
-      </fieldset>
-
-      {submitError && (
-        <div className="bg-destructive/10 text-destructive rounded-md p-3 text-sm mt-4">
-          {submitError}
-        </div>
-      )}
-
-      <button
-        onClick={handleSubmit}
-        disabled={!selectedCandidateId || isSubmitting}
-        className="w-full bg-primary text-primary-foreground rounded-md py-2.5 font-medium mt-6 disabled:opacity-50 disabled:cursor-not-allowed"
-      >
-        {isSubmitting ? "Відправка..." : "Проголосувати"}
-      </button>
-    </div>
-  );
+          </label>)}
+        </fieldset>
+        <button onClick={() => void handleSubmit()} disabled={!canVote || isSubmitting || !election.candidates.some(candidate => candidate.id === selectedCandidateId)} className="w-full bg-primary text-primary-foreground rounded-md py-2.5 font-medium disabled:opacity-50">
+          {isSubmitting ? 'Відправка…' : 'Проголосувати'}
+        </button>
+      </>}
+      {election.status === 'closed' && election.results_published
+        ? <Link to={`/vote/${id}/results`} className="block underline">Переглянути результати</Link>
+        : <p className="text-sm text-muted-foreground">Результати будуть доступні після закриття голосування та публікації автором.</p>}
+    </>}
+  </div>;
 }

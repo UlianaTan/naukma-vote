@@ -154,3 +154,13 @@ once; an ordinary forbidden action is never retried. Refresh also permits one CS
 repair; only 401 ends frontend identity, not a CSRF/origin 403 or network failure.
 Clearing the session invalidates pending frontend operations so late responses
 cannot refill the old token cache or replay requests under a later session.
+
+
+## Студентський frontend
+
+Frontend використовує студентські endpoints через спільну сесію, без тестових
+голосувань. `POST .../vote` очікує `{candidate_id}` і повертає `{status, message}`;
+час votedAt на клієнті не вигадується. `/vote/:id/done` підтверджує факт участі
+через has_voted, а `/vote/:id/results` показує лише опубліковані агрегати, отримані
+окремим запитом результатів. Студентська сторінка підсумків не вимагає whitelist
+і не звертається до endpoint деталей для перевірки доступу.
