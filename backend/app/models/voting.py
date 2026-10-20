@@ -38,7 +38,7 @@ class User(Base):
 
     __table_args__ = (
         UniqueConstraint("google_sub", name="uq_users_google_sub"),
-        Index("uq_users_email_normalized", func.lower(func.trim(email)), unique=True),
+        Index("uq_users_email_normalized", func.lower(func.ltrim(func.rtrim(email))), unique=True),
     )
 
 

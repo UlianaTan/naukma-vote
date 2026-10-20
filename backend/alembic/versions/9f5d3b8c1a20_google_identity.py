@@ -15,7 +15,7 @@ depends_on = None
 def upgrade():
     connection = op.get_bind()
     duplicate = connection.execute(sa.text(
-        "SELECT 1 FROM users GROUP BY lower(trim(email)) HAVING count(*) > 1 LIMIT 1"
+        "SELECT 1 FROM users GROUP BY lower(ltrim(rtrim(email))) HAVING count(*) > 1 LIMIT 1"
     )).first()
     if duplicate:
         raise RuntimeError("Conflicting normalized user emails; resolve accounts before migrating")
@@ -23,8 +23,8 @@ def upgrade():
     # Match the model's unique constraint, including its nullable legacy values.
     with op.batch_alter_table("users") as batch:
         batch.create_unique_constraint("uq_users_google_sub", ["google_sub"])
-    op.execute("UPDATE users SET email = lower(trim(email))")
-    op.create_index("uq_users_email_normalized", "users", [sa.text("lower(trim(email))")], unique=True)
+    op.execute("UPDATE users SET email = lower(ltrim(rtrim(email)))")
+    op.create_index("uq_users_email_normalized", "users", [sa.text("lower(ltrim(rtrim(email)))")], unique=True)
 
 
 def downgrade():

@@ -50,3 +50,14 @@ class GoogleIdentityMigrationTests(unittest.TestCase):
                     module.upgrade()
             self.assertEqual(connection.scalar(sa.text('SELECT count(*) FROM users')), 2)
             self.assertNotIn('google_sub', [c['name'] for c in sa.inspect(connection).get_columns('users')])
+
+    def test_postgresql_index_matches_reflected_database_expression(self):
+        # PostgreSQL rewrites trim(email) to TRIM(BOTH FROM email), which
+        # Alembic treats as a changed index. Ordinary ltrim/rtrim calls round-trip.
+        from app.models.voting import User
+        context = MigrationContext.configure(dialect_name='postgresql')
+        index = next(i for i in User.__table__.indexes if i.name == 'uq_users_email_normalized')
+        reflected = sa.Index('uq_users_email_normalized', sa.text(
+            'lower(ltrim(rtrim(email)))'), unique=True)
+        comparison = context.impl.compare_indexes(index, reflected)
+        self.assertTrue(comparison.is_equal, comparison.message)

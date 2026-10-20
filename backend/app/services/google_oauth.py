@@ -42,7 +42,7 @@ async def resolve_google_user(
         try:
             user = await db.scalar(select(User).where(User.google_sub == subject))
             email_users = list((await db.scalars(select(User).where(
-                func.lower(func.trim(User.email)) == email).limit(2))).all())
+                func.lower(func.ltrim(func.rtrim(User.email))) == email).limit(2))).all())
             if len(email_users) > 1:
                 raise OAuthFailure("account_conflict")
             email_user = email_users[0] if email_users else None
