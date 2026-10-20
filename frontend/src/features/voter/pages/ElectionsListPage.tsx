@@ -3,7 +3,7 @@ import { useAuth } from "../hooks/useAuth";
 import { useElections } from "../hooks/useElections";
 
 export function ElectionsListPage() {
-  const { user, logout } = useAuth();
+  const { user, logout, error: authError } = useAuth();
   const { elections, isLoading, error } = useElections();
 
   return (
@@ -17,6 +17,8 @@ export function ElectionsListPage() {
           </button>
         </div>
       </header>
+
+      {authError && <p role="alert" className="mb-4 text-destructive">{authError}</p>}
 
       <Link to="/admin" className="inline-block mb-6 underline">Мої голосування — створити та керувати</Link>
 

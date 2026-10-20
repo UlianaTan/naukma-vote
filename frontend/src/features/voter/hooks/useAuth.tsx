@@ -1,12 +1,15 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
-import { api, ApiError } from "../../../lib/api";
-import { API_BASE_URL, SESSION_EXPIRED_EVENT } from "../../../lib/session";
+import { api } from "../../../lib/api";
+import { API_BASE_URL, SESSION_EXPIRED_EVENT, sessionEpoch } from "../../../lib/session";
+import { loadSession } from "../../../lib/loadSession";
 import type { User } from "../types";
 
 interface AuthContextValue {
   user: User | null;
   isLoading: boolean;
   error: string | null;
+  sessionError: string | null;
+  retrySession: () => void;
   login: () => void;
   logout: () => Promise<void>;
 }
@@ -18,16 +21,39 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  const [sessionError, setSessionError] = useState<string | null>(null);
+  const [attempt, setAttempt] = useState(0);
+
+  function retrySession() {
+    setSessionError(null);
+    setIsLoading(true);
+    setAttempt(value => value + 1);
+  }
+
   useEffect(() => {
-    const expired = () => setUser(null);
+    let active = true;
+    const epoch = sessionEpoch();
+    const expired = () => {
+      setUser(null);
+      setSessionError(null);
+      setIsLoading(false);
+    };
     window.addEventListener(SESSION_EXPIRED_EVENT, expired);
-    api
-      .get<User>("/api/auth/me")
-      .then(setUser)
-      .catch(() => setUser(null))
-      .finally(() => setIsLoading(false));
-    return () => window.removeEventListener(SESSION_EXPIRED_EVENT, expired);
-  }, []);
+    loadSession<User>()
+      .then(result => {
+        if (!active || epoch !== sessionEpoch()) return;
+        if (result.kind === "authenticated") setUser(result.user);
+        else if (result.kind === "anonymous") setUser(null);
+        else setSessionError("Не вдалося перевірити сесію. Перевірте з’єднання та повторіть спробу.");
+      })
+      .finally(() => {
+        if (active && epoch === sessionEpoch()) setIsLoading(false);
+      });
+    return () => {
+      active = false;
+      window.removeEventListener(SESSION_EXPIRED_EVENT, expired);
+    };
+  }, [attempt]);
 
   function login() {
     const next = encodeURIComponent(`${window.location.origin}/`);
@@ -35,16 +61,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }
 
   async function logout() {
+    setError(null);
     try {
       await api.post("/api/auth/logout");
       setUser(null);
-    } catch (e) {
-      setError(e instanceof ApiError ? e.message : "Не вдалося вийти");
+      setSessionError(null);
+      setIsLoading(false);
+    } catch {
+      setError("Не вдалося вийти. Перевірте з’єднання та спробуйте ще раз.");
     }
   }
 
   return (
-    <AuthContext.Provider value={{ user, isLoading, error, login, logout }}>
+    <AuthContext.Provider value={{ user, isLoading, error, sessionError, retrySession, login, logout }}>
       {children}
     </AuthContext.Provider>
   );

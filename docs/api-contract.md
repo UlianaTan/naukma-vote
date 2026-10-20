@@ -142,5 +142,15 @@ total_votes, eligible_voters, participants, turnout_percent`. Назви, що
   Response is no-store; supports access expiry and absent CSRF cookie.
 - Mutation requests include matching `X-CSRF-Token` and csrf_token cookie.
 - `POST /api/auth/refresh`: valid CSRF and refresh → new HttpOnly access cookie.
-- `POST /api/auth/logout`: valid CSRF → refresh revoked, session cookies deleted.
+- `POST /api/auth/logout`: exact allowed Origin, or matching CSRF when Origin is absent →
+  refresh revoked, session cookies deleted. Untrusted/null Origin is always rejected.
+  Trusted browser logout works even if refresh expired and `/csrf` returns 401.
 - Clients retry once after a successful refresh on 401; never refresh on 403.
+
+
+Session recovery distinguishes a CSRF mismatch (`detail: Missing or invalid CSRF token`)
+from an authorization 403. Fetch/Axios reload CSRF and retry that rejected mutation
+once; an ordinary forbidden action is never retried. Refresh also permits one CSRF
+repair; only 401 ends frontend identity, not a CSRF/origin 403 or network failure.
+Clearing the session invalidates pending frontend operations so late responses
+cannot refill the old token cache or replay requests under a later session.

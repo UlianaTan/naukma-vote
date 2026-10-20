@@ -13,7 +13,7 @@ const authMessages: Record<string, string> = {
 };
 
 export function LoginPage() {
-  const { login } = useAuth();
+  const { login, sessionError, retrySession } = useAuth();
   const [searchParams] = useSearchParams();
   const authError = searchParams.get("error");
 
@@ -25,6 +25,12 @@ export function LoginPage() {
           Вхід лише для акаунтів <span className="font-medium">@ukma.edu.ua</span>
         </p>
 
+        {sessionError && (
+          <div role="alert" className="space-y-2 text-sm">
+            <p>{sessionError}</p>
+            <button onClick={retrySession} className="underline">Повторити перевірку сесії</button>
+          </div>
+        )}
         {authError && (
           <div role="alert" className="bg-destructive/10 text-destructive text-sm rounded-md p-3">
             {Object.hasOwn(authMessages, authError)
