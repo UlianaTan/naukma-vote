@@ -1,6 +1,17 @@
 import { useSearchParams } from "react-router-dom";
 import { useAuth } from "../hooks/useAuth";
 
+const authMessages: Record<string, string> = {
+  access_denied: "Вхід скасовано. Ви можете спробувати ще раз.",
+  invalid_state: "Спроба входу застаріла або була перервана. Почніть вхід ще раз.",
+  invalid_domain: "Увійти можна лише через університетський Google-акаунт (@ukma.edu.ua).",
+  unverified_email: "Google не підтвердив вашу електронну адресу. Оберіть інший акаунт.",
+  invalid_profile: "Не вдалося перевірити дані Google-акаунта. Спробуйте ще раз.",
+  google_unavailable: "Не вдалося зв’язатися з Google. Спробуйте пізніше.",
+  auth_unavailable: "Вхід тимчасово недоступний. Спробуйте пізніше або зверніться до підтримки.",
+  account_conflict: "Не вдалося безпечно пов’язати обліковий запис. Зверніться до підтримки.",
+};
+
 export function LoginPage() {
   const { login } = useAuth();
   const [searchParams] = useSearchParams();
@@ -14,14 +25,11 @@ export function LoginPage() {
           Вхід лише для акаунтів <span className="font-medium">@ukma.edu.ua</span>
         </p>
 
-        {authError === "invalid_domain" && (
-          <div className="bg-destructive/10 text-destructive text-sm rounded-md p-3">
-            Увійти можна лише через університетський акаунт (@ukma.edu.ua)
-          </div>
-        )}
-        {authError && authError !== "invalid_domain" && (
-          <div className="bg-destructive/10 text-destructive text-sm rounded-md p-3">
-            Сталася помилка входу. Спробуйте ще раз.
+        {authError && (
+          <div role="alert" className="bg-destructive/10 text-destructive text-sm rounded-md p-3">
+            {Object.hasOwn(authMessages, authError)
+              ? authMessages[authError]
+              : "Сталася помилка входу. Спробуйте ще раз."}
           </div>
         )}
 

@@ -59,9 +59,10 @@ cd backend && ../.venv/bin/python -m app.cli.validate_data [election_id]
 доступний її автору за записом створення в журналі.
 `X-User-Id` більше не визначає особу, тестовий адміністратор автоматично не створюється.
 Google OAuth callback видає сесію; окремий `/api/auth/login` залишається mock-входом
-лише при `ALLOW_MOCK_AUTH=true`. На staging задавайте `ALLOW_MOCK_AUTH=false`.
-У production mock заборонено. Узгодження frontend cookies/CSRF і наскрізна
-перевірка Google OAuth на staging залишаються окремими кроками інтеграції.
+лише при `ALLOW_MOCK_AUTH=true` (за замовчуванням дозволений тільки локально).
+На staging задавайте `ALLOW_MOCK_AUTH=false`; у production mock заборонено.
+Cookies/CSRF і спільний refresh підключено; реальний Google OAuth та політики
+cookies у браузерах staging ще потрібно перевірити.
 
 Розділення таблиць явки й бюлетенів не доводить повну анонімність на всіх
 рівнях системи.
@@ -106,3 +107,43 @@ These are code defaults, not a Render configuration change. Cross-site cookies c
 still be blocked by browser third-party-cookie policies: verify in actual staging
 browsers. If blocked, use frontend/API under the same site or a same-origin API proxy;
 SameSite=None alone does not override browser privacy settings.
+
+
+## Google OAuth
+
+`GET /api/auth/google/login?next=<frontend URL>` перевіряє Client ID, Client Secret,
+callback URL, SESSION_SECRET, строки сесії та cookie-політику до переходу в Google.
+`next` дозволений лише для FRONTEND_ORIGIN; frontend передає власну адресу.
+Потрібні `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REDIRECT_URI`.
+Callback має шлях `/api/auth/google/callback`; поза local потрібен HTTPS.
+Запитуються лише `openid email`; Google refresh token не потрібний — застосунок
+видає власну refresh-сесію. Під час входу можна обрати акаунт.
+
+Callback спершу перевіряє state, потім обмінює code через Google HTTPS endpoints.
+Перевіряються `email_verified=true`, валідний email, непорожній `sub` та, якщо
+задано ALLOWED_EMAIL_DOMAIN, одночасно домен email і Workspace `hd`.
+Для університетського входу залишайте `ALLOWED_EMAIL_DOMAIN=ukma.edu.ua`.
+Налаштування порожнього домену дозволяє інші Google-акаунти й потребує окремої
+оцінки політики доступу; це не рекомендований режим NaUKMA Vote.
+
+Перед використанням нового коду застосуйте Alembic до окремої локальної/тестової БД:
+`alembic upgrade head`. Міграція `9f5d3b8c1a20` додає nullable UNIQUE `google_sub`
+і унікальний індекс нормалізованого email. Вона зупиняється перед змінами, якщо є
+кілька старих користувачів з однаковим нормалізованим email. Їх не можна автоматично
+видаляти чи об’єднувати: вони можуть мати власні голосування й історію участі.
+Після перевірки профілю старий єдиний запис без google_sub прив’язується до Google
+із збереженням ID, ролі та авторства. Інший Google sub не може переприв’язати запис.
+Зміна email того самого sub зберігає ID; конфлікт з іншим користувачем відхиляється.
+
+Успіх — 303 до дозволеного frontend, сесійні cookies. Помилки — 303 на
+`/login?error=<code>`: access_denied, invalid_state, invalid_domain,
+unverified_email, invalid_profile, google_unavailable, oauth_failed,
+auth_unavailable або account_conflict. Якщо жоден frontend origin не налаштовано,
+повертається 503. Відповіді не кешуються; OAuth cookies очищаються після callback,
+сирі відповіді Google, коди та секрети не передаються в повідомленнях помилок.
+Одна браузерна cookie зберігає одну поточну спробу: новий вхід в іншій вкладці
+може зробити попередній state невалідним; сторінка запропонує почати знову.
+
+Тести `test_google_oauth.py` підміняють Google, а не перевіряють реальний Google-вхід.
+`test_google_identity_migration.py` перевіряє нову міграцію ізольовано на SQLite;
+повний ланцюжок міграцій і паралельний вхід перевіряються на PostgreSQL у CI.

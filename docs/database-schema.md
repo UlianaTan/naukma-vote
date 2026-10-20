@@ -20,7 +20,7 @@ erDiagram
 
 | Таблиця | Призначення | Ключові обмеження |
 |---|---|---|
-| `users` | Користувачі (mock до Auth) | `email` UNIQUE; `role` voter/admin |
+| `users` | Користувачі Google OAuth | `email` UNIQUE і UNIQUE за lower(trim(email)); nullable UNIQUE `google_sub`; `role` voter/admin |
 | `elections` | Голосування | `status` draft/active/closed; **CHECK `ends_at > starts_at`**; `closed_at`, `results_published`, `results_published_at`; індекс `(status, ends_at)` для таймера |
 | `candidates` | Кандидати | FK `election_id`; **UNIQUE `(election_id, lower(name))`** |
 | `eligible_voters` | Whitelist email | UNIQUE `(election_id, email)`; **CHECK `email = lower(email)`**; індекс по `email` |

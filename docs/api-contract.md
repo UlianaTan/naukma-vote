@@ -107,11 +107,25 @@ total_votes, eligible_voters, participants, turnout_percent`. Назви, що
 
 `GET /health` — процес живий; `GET /health/ready` — БД відповідає (503 інакше).
 
-## Узгоджується з Backend Auth (ще не реалізовано)
+## Google OAuth — `/api/auth`
 
-`GET /auth/login`, `GET /auth/callback`, `GET /me`, вихід з акаунта. Backend
-Voting Core очікує від Auth лише заміни залежностей `get_current_user`
-(`app/core/dependencies.py` і `app/api/v1/elections.py`) та `require_organizer`.
+- GET `/api/auth/google/login?next=<frontend URL>` → 303 до Google. `next`
+  перевіряється за FRONTEND_ORIGIN. Вхід використовує `openid email`.
+- GET `/api/auth/google/callback` перевіряє state cookie, обмінює одноразовий
+  code, перевіряє email_verified, sub, email і Workspace hd. Перший вхід створює
+  користувача; повторний використовує Google sub. Старий запис із тим самим
+  нормалізованим email прив’язується лише без конфліктів і за умови, що Google
+  авторитетний для цього домену (Workspace hd збігається або Gmail).
+- Успіх → 303 до frontend із сесійними cookies. Помилки → 303 на frontend
+  `/login?error=<code>`; код не містить сирих помилок Google або секретів.
+  Коди: access_denied, invalid_state, invalid_domain, unverified_email,
+  invalid_profile, oauth_failed, google_unavailable, auth_unavailable, account_conflict.
+  Без налаштованої адреси frontend → 503.
+- OAuth cookies мають строк 10 хвилин та видаляються після callback.
+  Відповіді мають Cache-Control: no-store і Referrer-Policy: no-referrer.
+- POST `/api/auth/login` — окремий mock-вхід тільки за ALLOW_MOCK_AUTH=true;
+  за замовчуванням увімкнений лише локально, у production заборонений.
+
 
 ## Відомі розбіжності з ранніми чернетками
 
