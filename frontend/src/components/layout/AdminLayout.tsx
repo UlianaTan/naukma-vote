@@ -1,14 +1,12 @@
 import { useNavigate } from "react-router-dom";
-import { Outlet } from "react-router-dom";
+import { useAuth } from "../../features/voter/hooks/useAuth";
+import { Outlet, Link } from "react-router-dom";
 import { Shield, Bell, LogOut, Info } from "lucide-react";
 
 export default function AdminLayout() {
   const navigate = useNavigate();
 
-  const handleLogout = () => {
-    // Згодом тут буде виклик API для виходу
-    navigate("/login");
-  };
+  const { user, logout, error } = useAuth();
 
   return (
     <div className="min-h-screen flex flex-col bg-[#F8FAFC] font-sans text-slate-900">
@@ -36,12 +34,12 @@ export default function AdminLayout() {
           </button>
 
           <div className="flex flex-col text-left sm:text-right">
-            <span className="text-sm font-bold text-slate-900 leading-tight">admin</span>
-            <span className="text-xs text-slate-500 leading-tight truncate max-w-[160px] sm:max-w-none">Панель організатора</span>
+            <span className="text-sm font-bold text-slate-900 leading-tight">{user?.email}</span>
+            <span className="text-xs text-slate-500 leading-tight truncate max-w-[160px] sm:max-w-none">Мої голосування</span>
           </div>
 
           <button 
-            onClick={handleLogout}
+            onClick={() => void logout()}
             className="flex items-center gap-2 px-3 sm:px-4 py-2 border border-slate-200 rounded-lg text-slate-700 hover:bg-slate-50 text-sm font-semibold transition-colors shrink-0"
           >
             <LogOut className="w-4 h-4" />
@@ -52,6 +50,8 @@ export default function AdminLayout() {
 
       {/* Основна робоча область */}
       <main className="flex-1 w-full max-w-5xl mx-auto py-6 sm:py-10 px-4 relative z-10">
+        <nav className="mb-6 flex gap-4 text-sm underline"><Link to="/admin">Мої голосування</Link><Link to="/">Взяти участь у голосуванні</Link></nav>
+        {error && <p role="alert">{error}</p>}
         <Outlet />
       </main>
 

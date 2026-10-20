@@ -18,6 +18,8 @@ export function ElectionsListPage() {
         </div>
       </header>
 
+      <Link to="/admin" className="inline-block mb-6 underline">Мої голосування — створити та керувати</Link>
+
       {isLoading && (
         <div className="space-y-3">
           {[1, 2].map((i) => (

@@ -1,8 +1,7 @@
 export interface User {
   id: string;
   email: string;
-  name: string;
-  role: "voter" | "organizer";
+  role: "voter" | "admin";
 }
 
 export type ElectionStatus = "draft" | "active" | "closed";
