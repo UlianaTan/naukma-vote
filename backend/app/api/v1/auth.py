@@ -8,7 +8,8 @@ import urllib.parse
 from app.database import get_db
 from app.models.voting import User
 from app.services.auth_service import create_refresh_token, verify_refresh_token, revoke_refresh_token
-from app.core.jwt import create_access_token, decode_access_token
+from app.core.jwt import create_access_token
+from app.core.dependencies import get_current_user
 from app.core.config import get_settings
 from app.middleware.csrf import csrf_protect
 
@@ -203,16 +204,5 @@ async def logout(response: Response, refresh_token: str | None = Cookie(None), d
 
 
 @router.get("/me")
-async def me(access_token: str | None = Cookie(None), db: AsyncSession = Depends(get_db)):
-    if not access_token:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing access token")
-    try:
-        payload = decode_access_token(access_token)
-    except Exception:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid access token")
-    user_id = uuid.UUID(payload["sub"])
-    q = await db.execute(select(User).where(User.id == user_id))
-    user = q.scalar_one_or_none()
-    if not user:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
-    return {"id": str(user.id), "email": user.email}
+async def me(user: User = Depends(get_current_user)):
+    return {"id": str(user.id), "email": user.email, "role": user.role.value}

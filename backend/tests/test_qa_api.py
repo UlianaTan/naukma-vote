@@ -13,10 +13,6 @@
 Діагностика: QA_RAISE=1 показує справжній трейсбек сервера замість відповіді 500.
 
 Позначки:
-  BUG-1 (expectedFailure) - відомий дефект: адмін-API доступне без автентифікації
-        (get_current_user у app/core/dependencies.py ігнорує X-User-Id).
-        Коли Auth-модуль з'явиться, ці тести "несподівано пройдуть" і CI
-        підкаже прибрати декоратор expectedFailure.
   PROBE - перевірки, де контракт не дає точної відповіді; якщо падають,
         це кандидат на баг-репорт, а не помилка тесту.
 """
@@ -31,6 +27,7 @@ from datetime import datetime, timedelta, timezone
 from unittest import mock
 
 import httpx
+import jwt
 from sqlalchemy import event, func, select, text, update
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import IntegrityError
@@ -42,8 +39,9 @@ os.environ.setdefault("APP_ENV", "local")
 
 from app.database import get_db  # noqa: E402
 from app.main import app  # noqa: E402
-from app.models.enums import ElectionStatus  # noqa: E402
-from app.models.voting import Ballot, Base, Election, VoterParticipation  # noqa: E402
+from app.core.jwt import create_access_token  # noqa: E402
+from app.models.enums import ElectionStatus, UserRole  # noqa: E402
+from app.models.voting import Ballot, Base, Election, User, VoterParticipation  # noqa: E402
 from app.services.closer import run_closer_loop  # noqa: E402
 
 PG_URL = os.getenv("TEST_DATABASE_URL")
@@ -56,10 +54,7 @@ VOTER_BASE = 0xB0000000
 
 
 def voter_id(n: int) -> uuid.UUID:
-    """Детермінований UUID виборця. Перші 8 символів різні, бо mock-авторизація
-    будує email як user_<перші 8 символів UUID>@ukma.edu.ua. Префікс b0 гарантує,
-    що рядок UUID не схожий на число в експоненційному записі (напр. 000003e9...),
-    яке SQLite може інтерпретувати як float."""
+    """Stable UUID for a persisted test voter."""
     return uuid.UUID(f"{VOTER_BASE + n:08x}-0000-0000-0000-000000000000")
 
 
@@ -68,11 +63,27 @@ def voter_email(n: int) -> str:
 
 
 def vh(n: int) -> dict:
-    return {"X-User-Id": str(voter_id(n))}
+    return session_headers(voter_id(n))
+
+
+ADMIN_ID = uuid.UUID("a0000000-0000-0000-0000-000000000000")
+
+
+def session_headers(user_id):
+    return {
+        "Cookie": f"access_token={create_access_token(str(user_id))}; csrf_token=qa-csrf",
+        "X-CSRF-Token": "qa-csrf",
+    }
 
 
 class ApiTestCase(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
+        self.env = mock.patch.dict(os.environ, {
+            "SESSION_SECRET": "qa-session-secret-" * 4,
+            "ALLOW_MOCK_AUTH": "false",
+        })
+        self.env.start()
+        self.addCleanup(self.env.stop)
         self._admin_engine = None
         if PG_URL:
             database = make_url(PG_URL).database or ""
@@ -102,13 +113,21 @@ class ApiTestCase(unittest.IsolatedAsyncioTestCase):
             await conn.run_sync(Base.metadata.create_all)
         self.Session = async_sessionmaker(self.engine, expire_on_commit=False, autoflush=False)
 
+        async with self.Session() as session:
+            session.add(User(id=ADMIN_ID, email="organizer@ukma.edu.ua", role=UserRole.ADMIN))
+            session.add_all([
+                User(id=voter_id(n), email=voter_email(n), role=UserRole.VOTER)
+                for n in [*range(1001, 1021), 2999, 9999]
+            ])
+            await session.commit()
+
         async def override_get_db():
             async with self.Session() as session:
                 yield session
 
         app.dependency_overrides[get_db] = override_get_db
         transport = httpx.ASGITransport(app=app, raise_app_exceptions=bool(os.getenv("QA_RAISE")))
-        self.client = httpx.AsyncClient(transport=transport, base_url="http://test")
+        self.client = httpx.AsyncClient(transport=transport, base_url="http://test", headers=session_headers(ADMIN_ID))
         self.addAsyncCleanup(self._cleanup)
 
     async def _cleanup(self):
@@ -172,7 +191,7 @@ class ApiTestCase(unittest.IsolatedAsyncioTestCase):
         )
 
     async def warm_up(self, numbers):
-        """Створює mock-користувачів послідовно (щоб не змагатися за їх створення)."""
+        """Check the persisted voters before concurrent requests."""
         for n in numbers:
             resp = await self.client.get(PUBLIC, headers=vh(n))
             self.assertEqual(resp.status_code, 200, resp.text)
@@ -232,28 +251,26 @@ class Week4AccessTests(ApiTestCase):
                 bad.append((method, path, resp.status_code))
         return bad
 
-    @unittest.expectedFailure
     async def test_BUG1_admin_api_requires_authentication(self):
         """Без автентифікації адмін-API має відповідати 401/403."""
-        self.assertEqual(await self._bad_statuses(None), [])
+        self.assertEqual(await self._bad_statuses({"Cookie": ""}), [])
 
-    @unittest.expectedFailure
     async def test_BUG1_voter_cannot_use_admin_api(self):
-        """Звичайний виборець (X-User-Id) не має доступу до /admin: очікується 403."""
+        """Звичайний виборець із сесією не має доступу до /admin: очікується 403."""
         self.assertEqual(await self._bad_statuses(vh(1001)), [])
 
     async def test_mock_auth_disabled_returns_401_everywhere(self):
         """Як у production: без mock-авторизації і виборчі, і адмін-ендпоінти дають 401."""
         env = {"APP_ENV": "production", "ALLOW_MOCK_AUTH": "false"}
         with mock.patch.dict(os.environ, env):
-            admin_resp = await self.client.get(ADMIN)
-            voter_resp = await self.client.get(PUBLIC, headers=vh(1001))
+            admin_resp = await self.client.get(ADMIN, headers={"Cookie": ""})
+            voter_resp = await self.client.get(PUBLIC, headers={"Cookie": "", "X-User-Id": str(voter_id(1001))})
         self.assertEqual(admin_resp.status_code, 401)
         self.assertEqual(voter_resp.status_code, 401)
 
-    async def test_invalid_user_id_header_is_rejected(self):
+    async def test_invalid_user_id_header_does_not_replace_session(self):
         resp = await self.client.get(PUBLIC, headers={"X-User-Id": "not-a-uuid"})
-        self.assertEqual(resp.status_code, 400)
+        self.assertEqual(resp.status_code, 200)
 
     async def test_health_endpoints_do_not_need_auth(self):
         resp = await self.client.get("/health")
@@ -888,3 +905,85 @@ class Week7RegressionTests(ApiTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SessionAuthenticationTests(ApiTestCase):
+    async def test_me_returns_database_identity_and_role(self):
+        for user_id, role in [(ADMIN_ID, "admin"), (voter_id(1001), "voter")]:
+            response = await self.client.get("/api/auth/me", headers=session_headers(user_id))
+            self.assertEqual(response.status_code, 200, response.text)
+            self.assertEqual(response.json(), {
+                "id": str(user_id),
+                "email": "organizer@ukma.edu.ua" if role == "admin" else voter_email(1001),
+                "role": role,
+            })
+
+    async def test_missing_invalid_and_expired_sessions_return_401(self):
+        valid = create_access_token(str(voter_id(1001)))
+        claims = jwt.decode(valid, os.environ["SESSION_SECRET"], algorithms=["HS256"],
+                            options={"verify_aud": False})
+        claims["exp"] = int((datetime.now(timezone.utc) - HOUR).timestamp())
+        expired = jwt.encode(claims, os.environ["SESSION_SECRET"], algorithm="HS256")
+        missing_user = create_access_token(str(uuid.uuid4()))
+        for mock_enabled in ["false", "true"]:
+            with mock.patch.dict(os.environ, {"ALLOW_MOCK_AUTH": mock_enabled}):
+                for token in [None, "broken", valid + "tampered", expired, missing_user]:
+                    headers = {"Cookie": f"access_token={token}" if token else "",
+                               "X-User-Id": str(ADMIN_ID)}
+                    for path in ["/api/auth/me", ADMIN, PUBLIC]:
+                        with self.subTest(mock=mock_enabled, token=token, path=path):
+                            response = await self.client.get(path, headers=headers)
+                            self.assertEqual(response.status_code, 401, response.text)
+
+    async def test_user_id_header_cannot_impersonate_admin_or_voter(self):
+        headers = {**vh(1001), "X-User-Id": str(ADMIN_ID)}
+        response = await self.client.get(ADMIN, headers=headers)
+        self.assertEqual(response.status_code, 403)
+        response = await self.client.get("/api/auth/me", headers=headers)
+        self.assertEqual(response.json()["id"], str(voter_id(1001)))
+        response = await self.client.get(ADMIN, headers={"Cookie": "", "X-User-Id": str(ADMIN_ID)})
+        self.assertEqual(response.status_code, 401)
+
+    async def test_role_changes_apply_to_existing_session(self):
+        headers = session_headers(ADMIN_ID)
+        self.assertEqual((await self.client.get(ADMIN, headers=headers)).status_code, 200)
+        async with self.Session() as session:
+            await session.execute(update(User).where(User.id == ADMIN_ID).values(role=UserRole.VOTER))
+            await session.commit()
+        self.assertEqual((await self.client.get(ADMIN, headers=headers)).status_code, 403)
+        response = await self.client.get("/api/auth/me", headers=headers)
+        self.assertEqual(response.json()["role"], "voter")
+
+    async def test_mutations_without_session_return_401_before_csrf(self):
+        fake = uuid.uuid4()
+        for method, path in [("POST", ADMIN), ("PATCH", f"{ADMIN}/{fake}"),
+                             ("DELETE", f"{ADMIN}/{fake}"),
+                             ("POST", f"{PUBLIC}/{fake}/vote")]:
+            response = await self.client.request(method, path, headers={"Cookie": "", "X-CSRF-Token": ""}, json={})
+            self.assertEqual(response.status_code, 401, response.text)
+
+    async def test_authenticated_mutation_still_requires_csrf(self):
+        response = await self.client.post(ADMIN, headers={"X-CSRF-Token": "wrong"}, json={})
+        self.assertEqual(response.status_code, 403)
+        self.assertIn("CSRF", response.json()["detail"])
+
+    async def test_issued_login_cookie_works_for_me_and_voting(self):
+        # Use the same token issuance path as OAuth, without contacting Google.
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as browser:
+            with mock.patch.dict(os.environ, {"ALLOW_MOCK_AUTH": "true"}):
+                login = await browser.post("/api/auth/login")
+            self.assertEqual(login.status_code, 200, login.text)
+            self.assertIn("access_token", browser.cookies)
+            response = await browser.get("/api/auth/me")
+            self.assertEqual(response.status_code, 200, response.text)
+            self.assertEqual(response.json()["role"], "voter")
+            self.assertEqual((await browser.get(PUBLIC)).status_code, 200)
+            self.assertEqual((await browser.get(ADMIN)).status_code, 403)
+
+    async def test_unknown_session_does_not_create_a_user(self):
+        unknown_id = uuid.uuid4()
+        response = await self.client.get(PUBLIC, headers=session_headers(unknown_id))
+        self.assertEqual(response.status_code, 401)
+        async with self.Session() as session:
+            self.assertIsNone(await session.get(User, unknown_id))

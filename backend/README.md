@@ -48,10 +48,16 @@ production-чекліст — [docs/voting-core-operations.md](../docs/voting-co
 cd backend && ../.venv/bin/python -m app.cli.validate_data [election_id]
 ```
 
-Авторизація поки mock: адміністратор створюється в БД, виборець обирається
-через X-User-Id. Mock дозволений лише поза production (`ALLOW_MOCK_AUTH`);
-в production API без Auth-модуля відповідає 401, а `APP_ENV=production` з
-mock-авторизацією або локальною БД не стартує. Google OAuth ще не реалізований.
+Авторизація admin, voting і `/api/auth/me` використовує одну перевірку
+`access_token` cookie: підписаний JWT → наявний користувач у БД.
+Без валідної сесії API повертає 401; admin вимагає роль ADMIN у БД
+(інакше 403). `/me` повертає `id`, `email`, `role` (`voter` або `admin`).
+`X-User-Id` більше не визначає особу, тестовий адміністратор автоматично не створюється.
+Google OAuth callback видає сесію; окремий `/api/auth/login` залишається mock-входом
+лише при `ALLOW_MOCK_AUTH=true`. На staging задавайте `ALLOW_MOCK_AUTH=false`.
+У production mock заборонено. Узгодження frontend cookies/CSRF і наскрізна
+перевірка Google OAuth на staging залишаються окремими кроками інтеграції.
+
 Розділення таблиць явки й бюлетенів не доводить повну анонімність на всіх
 рівнях системи.
 

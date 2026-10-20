@@ -10,8 +10,7 @@ from fastapi import HTTPException
 from sqlalchemy import func, select
 
 from app.api.v1.admin_elections import add_candidate, add_voters, check_integrity
-from app.core.dependencies import get_current_user
-from app.models.enums import AuditAction, ElectionStatus
+from app.models.enums import AuditAction, ElectionStatus, UserRole
 from app.models.voting import (
     AuditLog, Ballot, Election, EligibleVoter, VoterParticipation,
 )
@@ -34,7 +33,7 @@ class DbTestCase(unittest.IsolatedAsyncioTestCase):
         self.engine.dispose()
 
     async def admin(self):
-        return await get_current_user(db=self.db)
+        return make_user(self.session, email="organizer@ukma.edu.ua", role=UserRole.ADMIN)
 
     def count(self, model, **where):
         stmt = select(func.count()).select_from(model)
