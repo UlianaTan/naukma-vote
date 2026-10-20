@@ -89,3 +89,17 @@ class CsrfTests(unittest.IsolatedAsyncioTestCase):
             await csrf_protect(request(cookie=''))
             with self.assertRaises(HTTPException):
                 await csrf_protect(request())
+
+
+class CookieConfigTests(unittest.TestCase):
+    def test_cookie_policy_and_explicit_staging_origins(self):
+        from app.core.config import get_settings
+        with patch.dict(os.environ, {'APP_ENV': 'staging', 'FRONTEND_ORIGIN': 'https://frontend.test', 'SESSION_COOKIE_SAMESITE': 'none'}):
+            settings = get_settings()
+            self.assertTrue(settings.cookie_secure)
+            self.assertEqual(settings.cookie_samesite, 'none')
+            self.assertEqual(settings.frontend_origins, ('https://frontend.test',))
+        for value in ['invalid', 'none']:
+            with patch.dict(os.environ, {'APP_ENV': 'local', 'SESSION_COOKIE_SAMESITE': value}):
+                with self.assertRaises(ValueError):
+                    _ = get_settings().cookie_samesite

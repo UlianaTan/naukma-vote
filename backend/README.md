@@ -79,3 +79,30 @@ TEST_DATABASE_URL вмикає перевірки паралельності, я
 видаляє лише її. Публічні таблиці не очищаються. Назва тестової БД має
 закінчуватися на _test або _ci. Міграції upgrade head та alembic check
 перевіряються окремо в CI після тестів.
+
+## Session cookies, CSRF and frontend refresh
+
+`GET /api/auth/csrf` returns only `{ "csrf_token": "..." }` with `Cache-Control: no-store`.
+It requires a valid refresh cookie (also works after access expiry), reuses an existing
+CSRF cookie and rejects an explicitly disallowed Origin. Access/refresh secrets are
+never returned in JSON. The CSRF cookie is HttpOnly as well: frontend uses this endpoint.
+Send `X-CSRF-Token` on POST/PATCH/PUT/DELETE, including refresh and logout.
+The backend still verifies ownership independently of CSRF.
+
+Cookies are host-only, Path=/, HttpOnly. Local uses SameSite=Lax without Secure;
+staging/production use SameSite=None and Secure by default. Override with
+`SESSION_COOKIE_SAMESITE=lax` for a same-site deployment. None is rejected on local HTTP.
+Access Max-Age matches ACCESS_EXPIRES_SECONDS; refresh/CSRF use REFRESH_EXPIRES_SECONDS.
+OAuth state/next use Lax and expire after 10 minutes. Logout revokes refresh and
+removes all session cookies with matching attributes. Issued access JWTs remain valid
+until their expiry if copied outside the browser; immediate JWT revocation is not implemented.
+Staging/production CORS allows only explicitly configured FRONTEND_ORIGIN values.
+
+Both frontend clients share one refresh in flight. A 401 triggers at most one refresh
+and one retry; 403 does not trigger refresh. Refresh authentication failure clears
+frontend identity; temporary network failures do not force logout.
+
+These are code defaults, not a Render configuration change. Cross-site cookies can
+still be blocked by browser third-party-cookie policies: verify in actual staging
+browsers. If blocked, use frontend/API under the same site or a same-origin API proxy;
+SameSite=None alone does not override browser privacy settings.

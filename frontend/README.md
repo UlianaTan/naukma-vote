@@ -78,3 +78,16 @@ export default defineConfig([
 
 Node 24: кореневий .nvmrc (у frontend: `nvm use ../.nvmrc`).
 CI читає цей самий файл. Пакети фіксує package-lock.json.
+
+## Session integration
+
+All requests include credentials. Fetch and Axios share CSRF retrieval through
+`/api/auth/csrf` and a single refresh request after a 401. Mutation requests send
+`X-CSRF-Token`. A 403 is shown as an access/CSRF error and never refreshes the session.
+Refresh failure with 401/403 clears the current identity so protected routes show login.
+CSV downloads still use Axios blob responses. No access/refresh tokens are stored
+in localStorage or exposed to JavaScript.
+
+Run `npm test` (Node 24) for CSRF, parallel refresh, retry limits, network failure
+and shared Axios/fetch session tests. These mocked transport tests do not replace
+Google OAuth and cookie-policy verification in real staging browsers.

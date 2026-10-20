@@ -121,3 +121,12 @@ Voting Core очікує від Auth лише заміни залежносте�
   `/admin/elections` (без `/api/v1`).
 * Результати тепер вимагають **публікації**: раніше були доступні одразу після
   закриття. Frontend має показувати стан «ще не опубліковано» для 403.
+## CSRF and session renewal
+
+- `GET /api/auth/csrf`: valid refresh cookie → 200 `{ "csrf_token": "..." }`,
+  missing/invalid/expired/revoked refresh → 401; disallowed Origin → 403.
+  Response is no-store; supports access expiry and absent CSRF cookie.
+- Mutation requests include matching `X-CSRF-Token` and csrf_token cookie.
+- `POST /api/auth/refresh`: valid CSRF and refresh → new HttpOnly access cookie.
+- `POST /api/auth/logout`: valid CSRF → refresh revoked, session cookies deleted.
+- Clients retry once after a successful refresh on 401; never refresh on 403.

@@ -1078,3 +1078,117 @@ class ElectionOwnershipTests(ApiTestCase):
             response = await self.client.get(f"{ADMIN}/{eid}/audit", headers=headers)
             self.assertEqual(response.status_code, 403)
         self.assertEqual((await self.client.get(f"{ADMIN}/{uuid.uuid4()}/audit", headers=vh(1001))).status_code, 404)
+
+
+class BrowserSessionTests(ApiTestCase):
+    async def browser_login(self, browser):
+        with mock.patch.dict(os.environ, {"ALLOW_MOCK_AUTH": "true"}):
+            response = await browser.post("/api/auth/login")
+        self.assertEqual(response.status_code, 200, response.text)
+        return response
+
+    async def test_staging_cookie_attributes_and_oauth_state(self):
+        env = {"APP_ENV": "staging", "SESSION_COOKIE_SAMESITE": "none",
+               "GOOGLE_CLIENT_ID": "test-client", "GOOGLE_REDIRECT_URI": "https://backend.test/api/auth/google/callback"}
+        with mock.patch.dict(os.environ, env):
+            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="https://backend.test") as browser:
+                login = await self.browser_login(browser)
+                cookies = login.headers.get_list("set-cookie")
+                for name, lifetime in [("access_token", 900), ("refresh_token", 2592000), ("csrf_token", 2592000)]:
+                    value = next(c for c in cookies if c.startswith(name + "="))
+                    for attribute in ["HttpOnly", "Secure", "SameSite=none", "Path=/", f"Max-Age={lifetime}"]:
+                        self.assertIn(attribute, value)
+                    self.assertNotIn("Domain=", value)
+                self.assertEqual((await browser.get("/api/auth/me")).status_code, 200)
+                oauth = await browser.get("/api/auth/google/login")
+                self.assertEqual(oauth.status_code, 307)
+                for value in oauth.headers.get_list("set-cookie"):
+                    for attribute in ["Secure", "HttpOnly", "SameSite=lax", "Max-Age=600"]:
+                        self.assertIn(attribute, value)
+
+    async def test_csrf_bootstrap_refresh_and_logout(self):
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as browser:
+            await self.browser_login(browser)
+            refresh_secret = browser.cookies.get("refresh_token")
+            # Simulate browser expiry of the access and CSRF cookies.
+            browser.cookies.delete("access_token")
+            browser.cookies.delete("csrf_token")
+            self.assertEqual((await browser.get("/api/auth/me")).status_code, 401)
+            csrf = await browser.get("/api/auth/csrf", headers={"Origin": "http://localhost:5173"})
+            self.assertEqual(csrf.status_code, 200, csrf.text)
+            self.assertEqual(csrf.headers["cache-control"], "no-store")
+            self.assertEqual(set(csrf.json()), {"csrf_token"})
+            token = csrf.json()["csrf_token"]
+            self.assertEqual(browser.cookies.get("csrf_token"), token)
+            again = await browser.get("/api/auth/csrf")
+            self.assertEqual(again.json()["csrf_token"], token)
+            for path in ["/api/auth/refresh", "/api/auth/logout"]:
+                for headers in [{}, {"X-CSRF-Token": "wrong"}, {"X-CSRF-Token": token, "Origin": "https://attacker.test"}]:
+                    self.assertEqual((await browser.post(path, headers=headers)).status_code, 403)
+            headers = {"X-CSRF-Token": token, "Origin": "http://localhost:5173"}
+            self.assertEqual((await browser.post("/api/auth/refresh", headers=headers)).status_code, 200)
+            self.assertEqual((await browser.get("/api/auth/me")).status_code, 200)
+            logout = await browser.post("/api/auth/logout", headers=headers)
+            self.assertEqual(logout.status_code, 200)
+            self.assertFalse(any(browser.cookies.get(name) for name in ["access_token", "refresh_token", "csrf_token"]))
+            self.assertEqual((await browser.get("/api/auth/me")).status_code, 401)
+            # Reusing a copied refresh token after logout must fail.
+            response = await browser.post("/api/auth/refresh", headers={
+                "Cookie": f"refresh_token={refresh_secret}; csrf_token={token}", "X-CSRF-Token": token,
+            })
+            self.assertEqual(response.status_code, 401)
+
+    async def test_csrf_endpoint_rejects_missing_invalid_revoked_or_expired_session(self):
+        from app.models.voting import RefreshToken
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as browser:
+            self.assertEqual((await browser.get("/api/auth/csrf")).status_code, 401)
+            self.assertEqual((await browser.get("/api/auth/csrf", headers={"Cookie": "refresh_token=bad"})).status_code, 401)
+            await self.browser_login(browser)
+            self.assertEqual((await browser.get("/api/auth/csrf", headers={"Origin": "https://attacker.test"})).status_code, 403)
+            async with self.Session() as session:
+                await session.execute(update(RefreshToken).values(expires_at=datetime.now(timezone.utc) - HOUR))
+                await session.commit()
+            self.assertEqual((await browser.get("/api/auth/csrf")).status_code, 401)
+
+    async def test_google_callback_uses_same_secure_cookie_policy(self):
+        from app.api.v1 import auth
+        from urllib.parse import parse_qs, urlparse
+        env = {"APP_ENV": "staging", "FRONTEND_ORIGIN": "https://frontend.test",
+               "SESSION_COOKIE_SAMESITE": "none", "GOOGLE_CLIENT_ID": "test-client",
+               "GOOGLE_REDIRECT_URI": "https://backend.test/api/auth/google/callback"}
+        with mock.patch.dict(os.environ, env):
+            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="https://backend.test") as browser:
+                redirect = await browser.get("/api/auth/google/login")
+                state = parse_qs(urlparse(redirect.headers["location"]).query)["state"][0]
+                google = mock.MagicMock()
+                google.post = mock.AsyncMock(return_value=httpx.Response(200, json={"access_token": "google-test-token"}))
+                google.get = mock.AsyncMock(return_value=httpx.Response(200, json={"email": voter_email(1001), "email_verified": True}))
+                context = mock.MagicMock()
+                context.__aenter__ = mock.AsyncMock(return_value=google)
+                context.__aexit__ = mock.AsyncMock(return_value=False)
+                with mock.patch.object(auth.httpx, "AsyncClient", return_value=context):
+                    callback = await browser.get("/api/auth/google/callback", params={"code": "test-code", "state": state})
+                self.assertEqual(callback.status_code, 307, callback.text)
+                self.assertEqual(callback.headers["location"], "https://frontend.test")
+                for name in ["access_token", "refresh_token", "csrf_token"]:
+                    value = next(c for c in callback.headers.get_list("set-cookie") if c.startswith(name + "="))
+                    self.assertIn("SameSite=none", value)
+                    self.assertIn("Secure", value)
+                    self.assertIn("HttpOnly", value)
+                self.assertIsNone(browser.cookies.get("oauth_state"))
+                self.assertIsNone(browser.cookies.get("oauth_next"))
+                self.assertEqual((await browser.get("/api/auth/me")).json()["id"], str(voter_id(1001)))
+
+    async def test_cors_preflight_allows_csrf_only_for_configured_frontend(self):
+        allowed = await self.client.options("/api/auth/refresh", headers={
+            "Origin": "http://localhost:5173", "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "X-CSRF-Token, Content-Type",
+        })
+        self.assertEqual(allowed.status_code, 200, allowed.text)
+        self.assertEqual(allowed.headers["access-control-allow-origin"], "http://localhost:5173")
+        self.assertEqual(allowed.headers["access-control-allow-credentials"], "true")
+        denied = await self.client.options("/api/auth/refresh", headers={
+            "Origin": "https://attacker.test", "Access-Control-Request-Method": "POST",
+        })
+        self.assertEqual(denied.status_code, 400)
+        self.assertNotIn("access-control-allow-origin", denied.headers)

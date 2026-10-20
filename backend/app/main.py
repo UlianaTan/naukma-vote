@@ -59,7 +59,7 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# Дозволені адреси фронтенду: FRONTEND_ORIGIN (+ localhost поза production)
+# Дозволені адреси фронтенду: FRONTEND_ORIGIN (+ localhost лише для local)
 # Налаштування CORS без wildcard з credentials
 app.add_middleware(
     CORSMiddleware,

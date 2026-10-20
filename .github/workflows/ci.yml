@@ -47,6 +47,9 @@ jobs:
       - name: Lint
         id: lint
         run: npm run lint
+      - name: Session client tests
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: npm test
       - name: Build
         id: build
         # Check the build even if lint failed, so both results are visible.
