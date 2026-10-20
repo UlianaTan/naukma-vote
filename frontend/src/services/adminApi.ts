@@ -113,7 +113,7 @@ export const adminApi = {
     ends_at: string;
     candidates?: Array<{ name: string; description?: string }>;
   }) => {
-    const response = await api.post('/admin/elections', data);
+    const response = await api.post<AdminElection>('/admin/elections', data);
     return response.data;
   },
 
@@ -133,7 +133,7 @@ export const adminApi = {
     starts_at?: string;
     ends_at?: string;
   }) => {
-    const response = await api.patch(`/admin/elections/${electionId}`, data);
+    const response = await api.patch<AdminElection>(`/admin/elections/${electionId}`, data);
     return response.data;
   },
 
@@ -143,7 +143,7 @@ export const adminApi = {
   },
 
   addCandidate: async (electionId: string, data: { name: string; description?: string }) => {
-    const response = await api.post(`/admin/elections/${electionId}/candidates`, data);
+    const response = await api.post<AdminCandidate>(`/admin/elections/${electionId}/candidates`, data);
     return response.data;
   },
 
@@ -164,7 +164,7 @@ export const adminApi = {
   },
 
   addVotersBatch: async (electionId: string, emails: string[]) => {
-    const response = await api.post(`/admin/elections/${electionId}/voters`, { emails });
+    const response = await api.post<{ added: number; already_present: number; duplicates_in_request: number; invalid: { value: string; reason: string }[] }>(`/admin/elections/${electionId}/voters`, { emails });
     return response.data;
   },
 

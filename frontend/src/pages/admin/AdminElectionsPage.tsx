@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { adminApi } from "../../services/adminApi";
 import { Folder } from "lucide-react";
+import { adminStatus } from '../../services/adminForm';
 import toast from 'react-hot-toast';
 
 import type { AdminElection } from "../../services/adminApi";
@@ -12,6 +13,7 @@ export function AdminElectionsPage() {
   const [elections, setElections] = useState<AdminElection[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [reload, setReload] = useState(0);
   const [activeTab, setActiveTab] = useState("Усі");
 
   const tabs = ["Усі", "Чернетки", "Активні", "Завершені"];
@@ -35,7 +37,7 @@ export function AdminElectionsPage() {
     };
 
     fetchElections();
-  }, []);
+  }, [reload]);
 
   // Фільтруємо голосування залежно від обраної вкладки
   const filteredElections = (elections || []).filter((election) => {
@@ -47,12 +49,12 @@ export function AdminElectionsPage() {
   });
 
   // Візуальні беджі для статусів
-  const renderStatus = (status: string) => {
-    switch (status) {
+  const renderStatus = (election: AdminElection) => {
+    switch (election.status) {
       case "active":
         return (
           <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-[#E6F4EA] text-[#137333] text-sm font-medium">
-            <span className="w-1.5 h-1.5 rounded-full bg-[#137333]"></span> Активне
+            <span className="w-1.5 h-1.5 rounded-full bg-[#137333]"></span> {adminStatus(election)}
           </span>
         );
       case "closed":
@@ -120,7 +122,7 @@ export function AdminElectionsPage() {
       {/* Стан помилки */}
       {!isLoading && error && (
         <div className="bg-red-50 text-red-600 rounded-xl p-4 text-sm border border-red-100">
-          {error}
+          {error} <button onClick={() => setReload(value => value + 1)}>Повторити</button>
         </div>
       )}
 
@@ -194,7 +196,7 @@ export function AdminElectionsPage() {
                   {election.title}
                 </div>
                 <div className="col-span-2 flex items-center">
-                  {renderStatus(election.status)}
+                  {renderStatus(election)}
                 </div>
                 <div className="col-span-2 text-sm text-slate-500">
                   Кількість виборців — у моніторингу
@@ -208,18 +210,12 @@ export function AdminElectionsPage() {
                       >
                         Моніторинг
                       </button>
-                      <button 
-                        onClick={() => navigate(`/admin/edit/${election.id}`)}
-                        className="bg-white border border-slate-200 text-slate-700 px-4 py-2 rounded-lg text-sm font-medium hover:bg-slate-50"
-                      >
-                        Редагувати
-                      </button>
                     </>
                   )}
                   {(!election.status || election.status === "draft") && (
                     <>
                       <button 
-                        onClick={() => navigate(`/admin/monitor/${election.id}`)}
+                        onClick={() => navigate(`/admin/edit/${election.id}`)}
                         className="bg-[#0B1B3D] text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-slate-800"
                       >
                         Запустити
