@@ -10,6 +10,7 @@ from app.models.voting import User
 from app.services.auth_service import create_refresh_token, verify_refresh_token, revoke_refresh_token
 from app.core.jwt import create_access_token, decode_access_token
 from app.core.config import get_settings
+from app.middleware.csrf import csrf_protect
 
 import uuid
 import secrets
@@ -177,7 +178,7 @@ async def google_callback(code: str | None = None, state: str | None = None, oau
     return response
 
 
-@router.post("/refresh")
+@router.post("/refresh", dependencies=[Depends(csrf_protect)])
 async def refresh(response: Response, refresh_token: str | None = Cookie(None), db: AsyncSession = Depends(get_db)):
     if not refresh_token:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing refresh token")
@@ -190,7 +191,7 @@ async def refresh(response: Response, refresh_token: str | None = Cookie(None), 
     return {"status": "ok"}
 
 
-@router.post("/logout")
+@router.post("/logout", dependencies=[Depends(csrf_protect)])
 async def logout(response: Response, refresh_token: str | None = Cookie(None), db: AsyncSession = Depends(get_db)):
     if refresh_token:
         await revoke_refresh_token(db, refresh_token)
@@ -209,7 +210,7 @@ async def me(access_token: str | None = Cookie(None), db: AsyncSession = Depends
         payload = decode_access_token(access_token)
     except Exception:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid access token")
-    user_id = payload.get("sub")
+    user_id = uuid.UUID(payload["sub"])
     q = await db.execute(select(User).where(User.id == user_id))
     user = q.scalar_one_or_none()
     if not user:

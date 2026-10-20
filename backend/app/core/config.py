@@ -96,8 +96,8 @@ def production_problems(settings: Settings) -> list[str]:
             problems.append(f"FRONTEND_ORIGIN має бути https: {origin}")
     if not settings.closer_enabled:
         problems.append("ELECTION_CLOSER_ENABLED=false: таймер закриття вимкнено")
-    if not settings.session_secret:
-        problems.append("SESSION_SECRET не задано")
+    if len(settings.session_secret.encode()) < 32:
+        problems.append("SESSION_SECRET має містити щонайменше 32 байти")
     # GOOGLE keys are optional; if frontend expects google auth in production, these must be set
     if settings.google_client_id == "" or settings.google_client_secret == "":
         problems.append("GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET не задані")
