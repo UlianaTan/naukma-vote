@@ -100,3 +100,31 @@ If CSRF bootstrap returns 401, logout still reaches the backend, which verifies 
 browser's exact trusted Origin before revoking refresh and clearing cookies.
 Session clearing invalidates pending requests and CSRF cache writes. These checks
 protect frontend state; they do not add immediate revocation of copied access JWTs.
+
+
+## Студентське голосування через API
+
+Список і деталі завантажуються через `/api/v1/elections` та `/{id}` за поточною
+cookie-сесією. Моки і локальний список «вже проголосував» прибрано. Типи повторюють
+API: starts_at/ends_at, nullable description, has_voted і results_published.
+Список містить доступні активні та закриті голосування. Дати показуються за місцевим
+часом браузера; форма враховує час початку, завершення й факт участі. Остаточну
+перевірку допуску, часу та єдиного голосу завжди виконує backend.
+
+Голос — `POST /api/v1/elections/{id}/vote` з `{candidate_id}` через спільний CSRF/
+refresh-клієнт. Після успішної відповіді відкривається `/vote/:id/done`; ця сторінка
+перевіряє has_voted і показує лише підтвердження участі, без підсумків кандидатів.
+Після втраченої відповіді або 5xx перевіряється has_voted; голос автоматично повторно
+не надсилається. Якщо підтвердити участь неможливо, форма блокує нове подання до
+перевірки стану. При 409 також перевіряється факт участі.
+
+Окремий маршрут `/vote/:id/results` завантажує лише `GET /api/v1/elections/{id}/results`.
+Не викликає whitelist-захищений endpoint деталей: опубліковані підсумки доступні
+всім авторизованим користувачам. Закриття та публікацію перевіряє backend, frontend
+не показує підсумків після відмови API. Кнопка у списку з’являється для закритих
+голосувань із results_published=true. Показуються переможець, нічия або відсутність
+голосів, кількість і відсотки за кандидатів. Є ручне оновлення списку та результатів.
+
+`npm test` включає контракт запитів, CSRF, відмови API, часові межі, перевірку
+участі після втраченої відповіді та незалежний доступ до опублікованих підсумків.
+Ці тести не підтверджують Google OAuth чи сторонні cookies на Render.

@@ -5,6 +5,7 @@ import { LoginPage } from './features/voter/pages/LoginPage';
 import { ElectionsListPage } from './features/voter/pages/ElectionsListPage';
 import { VotingPage } from './features/voter/pages/VotingPage';
 import { ResultPage } from './features/voter/pages/ResultPage';
+import { PublishedResultsPage } from './features/voter/pages/PublishedResultsPage';
 import AdminLayout from './components/layout/AdminLayout';
 import { AdminElectionsPage } from './pages/admin/AdminElectionsPage';
 import { CreateElectionPage } from './pages/admin/CreateElectionPage';
@@ -70,6 +71,8 @@ function App() {
               </ProtectedVoterRoute>
             }
           />
+
+          <Route path="/vote/:id/results" element={<ProtectedVoterRoute><PublishedResultsPage /></ProtectedVoterRoute>} />
 
           {/* Єдина секція для всіх адміністративних маршрутів під AdminLayout */}
           <Route path="/admin" element={<ProtectedVoterRoute><AdminLayout /></ProtectedVoterRoute>}>
