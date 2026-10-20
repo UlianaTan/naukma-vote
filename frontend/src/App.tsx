@@ -66,7 +66,7 @@ function App() {
           />
 
           {/* Єдина секція для всіх адміністративних маршрутів під AdminLayout */}
-          <Route path="/admin" element={<AdminLayout />}>
+          <Route path="/admin" element={<ProtectedVoterRoute><AdminLayout /></ProtectedVoterRoute>}>
             <Route index element={<AdminElectionsPage />} />
             <Route path="create" element={<CreateElectionPage />} />
             <Route path="edit/:id" element={<CreateElectionPage />} />

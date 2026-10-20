@@ -12,8 +12,8 @@ from app.domain.emails import parse_email_batch
 from app.domain.lifecycle import as_utc
 from app.domain.tally import percent
 from app.models.enums import AuditAction
-from app.models.voting import Election, Candidate, ElectionStatus, EligibleVoter, User
-from app.core.dependencies import require_organizer
+from app.models.voting import Election, Candidate, ElectionStatus, EligibleVoter, User, AuditLog
+from app.core.dependencies import get_current_user
 from app.schemas.admin_elections import (
     AuditLogOut,
     ElectionCreate,
@@ -38,6 +38,25 @@ from app.services.voting_service import VotingService
 router = APIRouter(prefix="/admin/elections", tags=["Admin: Elections Management"])
 
 NOT_FOUND = "Голосування не знайдено"
+
+
+async def _require_owner(
+    db: AsyncSession, election_id: uuid.UUID, user: User, *, allow_deleted: bool = False,
+) -> None:
+    """Only the creator manages an election; global roles grant no bypass."""
+    result = await db.execute(select(Election.created_by).where(Election.id == election_id))
+    owner_id = result.scalar_one_or_none()
+    if owner_id is None and allow_deleted:
+        # Creation audit survives draft deletion and retains its original owner.
+        result = await db.execute(select(AuditLog.actor_user_id).where(
+            AuditLog.election_id == election_id,
+            AuditLog.action == AuditAction.ELECTION_CREATED.value,
+        ))
+        owner_id = result.scalar_one_or_none()
+    if owner_id is None:
+        raise HTTPException(status_code=404, detail=NOT_FOUND)
+    if owner_id != user.id:
+        raise HTTPException(status_code=403, detail="Керувати голосуванням може лише його автор")
 
 
 async def _load_with_candidates(db: AsyncSession, election_id: uuid.UUID) -> Election:
@@ -76,7 +95,7 @@ def _lifecycle(election: Election, changed: bool) -> LifecycleResponse:
 async def create_election_draft(
     payload: ElectionCreate,
     db: AsyncSession = Depends(get_db),
-    admin: User = Depends(require_organizer),
+    current_user: User = Depends(get_current_user),
 ):
     """Створення чернетки виборів (можна одразу додати кандидатів)."""
     election = Election(
@@ -85,7 +104,7 @@ async def create_election_draft(
         status=ElectionStatus.DRAFT,
         starts_at=payload.starts_at,
         ends_at=payload.ends_at,
-        created_by=admin.id,
+        created_by=current_user.id,
     )
     db.add(election)
     await db.flush()
@@ -101,7 +120,7 @@ async def create_election_draft(
     record_audit(
         db,
         action=AuditAction.ELECTION_CREATED,
-        actor_id=admin.id,
+        actor_id=current_user.id,
         election_id=election.id,
         details={"title": election.title, "candidates": len(payload.candidates)},
     )
@@ -113,11 +132,14 @@ async def create_election_draft(
 @router.get("", response_model=List[ElectionDetailResponse])
 async def list_admin_elections(
     db: AsyncSession = Depends(get_db),
-    admin: User = Depends(require_organizer),
+    current_user: User = Depends(get_current_user),
 ):
-    """Перегляд усіх голосувань для адмін-панелі."""
+    """Голосування, створені поточним користувачем."""
     result = await db.execute(
-        select(Election).options(selectinload(Election.candidates)).order_by(Election.starts_at.desc())
+        select(Election)
+        .where(Election.created_by == current_user.id)
+        .options(selectinload(Election.candidates))
+        .order_by(Election.starts_at.desc())
     )
     return result.scalars().all()
 
@@ -125,9 +147,10 @@ async def list_admin_elections(
 async def get_election_detail(
     election_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    admin: User = Depends(require_organizer),
+    current_user: User = Depends(get_current_user),
 ):
     """Деталі голосування за його ID."""
+    await _require_owner(db, election_id, current_user)
     return await _load_with_candidates(db, election_id)
 
 @router.patch("/{election_id}", response_model=ElectionDetailResponse)
@@ -135,9 +158,10 @@ async def update_election_draft(
     election_id: uuid.UUID,
     payload: ElectionUpdate,
     db: AsyncSession = Depends(get_db),
-    admin: User = Depends(require_organizer),
+    current_user: User = Depends(get_current_user),
 ):
     """Редагування чернетки (заборонено після переходу в active або closed)."""
+    await _require_owner(db, election_id, current_user)
     election = await _lock_draft(
         db, election_id, "Редагування заборонене: голосування вже активоване або завершене"
     )
@@ -158,7 +182,7 @@ async def update_election_draft(
     record_audit(
         db,
         action=AuditAction.ELECTION_UPDATED,
-        actor_id=admin.id,
+        actor_id=current_user.id,
         election_id=election.id,
         details={"fields": sorted(update_data.keys())},
     )
@@ -169,16 +193,17 @@ async def update_election_draft(
 async def delete_election_draft(
     election_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    admin: User = Depends(require_organizer),
+    current_user: User = Depends(get_current_user),
 ):
     """Видалення чернетки голосування."""
+    await _require_owner(db, election_id, current_user)
     election = await _lock_draft(
         db, election_id, "Неможливо видалити голосування, яке вже стартувало або завершилось"
     )
     record_audit(
         db,
         action=AuditAction.ELECTION_DELETED,
-        actor_id=admin.id,
+        actor_id=current_user.id,
         election_id=election.id,
         details={"title": election.title},
     )
@@ -193,9 +218,10 @@ async def add_candidate(
     election_id: uuid.UUID,
     payload: CandidateCreate,
     db: AsyncSession = Depends(get_db),
-    admin: User = Depends(require_organizer),
+    current_user: User = Depends(get_current_user),
 ):
     """Додавання кандидата до чернетки виборів."""
+    await _require_owner(db, election_id, current_user)
     await _lock_draft(db, election_id, "Кандидатів можна додавати лише до чернетки")
 
     # Порівняння в Python (casefold): lower() у БД залежить від локалі й
@@ -216,7 +242,7 @@ async def add_candidate(
     record_audit(
         db,
         action=AuditAction.CANDIDATE_ADDED,
-        actor_id=admin.id,
+        actor_id=current_user.id,
         election_id=election_id,
         details={"candidate_id": candidate.id},
     )
@@ -229,9 +255,10 @@ async def remove_candidate(
     election_id: uuid.UUID,
     candidate_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    admin: User = Depends(require_organizer),
+    current_user: User = Depends(get_current_user),
 ):
     """Видалення кандидата з чернетки."""
+    await _require_owner(db, election_id, current_user)
     election = await election_service.get_election_locked(db, election_id)
     if election.status != ElectionStatus.DRAFT:
         raise HTTPException(status_code=400, detail="Неможливо видалити кандидата з активних виборів")
@@ -249,7 +276,7 @@ async def remove_candidate(
     record_audit(
         db,
         action=AuditAction.CANDIDATE_REMOVED,
-        actor_id=admin.id,
+        actor_id=current_user.id,
         election_id=election_id,
         details={"candidate_id": candidate_id},
     )
@@ -265,9 +292,10 @@ async def list_voters(
     limit: int = Query(1000, ge=1, le=5000),
     offset: int = Query(0, ge=0),
     db: AsyncSession = Depends(get_db),
-    admin: User = Depends(require_organizer),
+    current_user: User = Depends(get_current_user),
 ):
     """Список допущених email (лише для організатора)."""
+    await _require_owner(db, election_id, current_user)
     if not await db.scalar(select(Election.id).where(Election.id == election_id)):
         raise HTTPException(status_code=404, detail=NOT_FOUND)
     res = await db.execute(
@@ -284,10 +312,11 @@ async def add_voters(
     election_id: uuid.UUID,
     payload: WhitelistAddRequest,
     db: AsyncSession = Depends(get_db),
-    admin: User = Depends(require_organizer),
+    current_user: User = Depends(get_current_user),
 ):
     """Додати email до списку виборців (лише чернетка). Некоректні рядки
     повертаються в `invalid`, решта додається."""
+    await _require_owner(db, election_id, current_user)
     await _lock_draft(db, election_id, "Список виборців можна змінювати лише у чернетці")
 
     valid, duplicates, invalid = parse_email_batch(
@@ -310,7 +339,7 @@ async def add_voters(
     record_audit(
         db,
         action=AuditAction.VOTERS_ADDED,
-        actor_id=admin.id,
+        actor_id=current_user.id,
         election_id=election_id,
         details={"added": len(fresh), "already_present": len(existing), "invalid": len(invalid)},
     )
@@ -327,9 +356,10 @@ async def remove_voter(
     election_id: uuid.UUID,
     voter_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    admin: User = Depends(require_organizer),
+    current_user: User = Depends(get_current_user),
 ):
     """Видалити виборця зі списку (лише чернетка)."""
+    await _require_owner(db, election_id, current_user)
     await _lock_draft(db, election_id, "Список виборців можна змінювати лише у чернетці")
     res = await db.execute(
         select(EligibleVoter).where(
@@ -339,7 +369,7 @@ async def remove_voter(
     voter = res.scalar_one_or_none()
     if not voter:
         raise HTTPException(status_code=404, detail="Виборця не знайдено")
-    record_audit(db, action=AuditAction.VOTER_REMOVED, actor_id=admin.id, election_id=election_id)
+    record_audit(db, action=AuditAction.VOTER_REMOVED, actor_id=current_user.id, election_id=election_id)
     await db.delete(voter)
     await db.commit()
     return None
@@ -350,40 +380,44 @@ async def remove_voter(
 async def activate_election(
     election_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    admin: User = Depends(require_organizer),
+    current_user: User = Depends(get_current_user),
 ):
     """draft → active. Повторний запит на active-голосування — 200, changed=false."""
-    election, changed = await election_service.activate_election(db, election_id, admin.id)
+    await _require_owner(db, election_id, current_user)
+    election, changed = await election_service.activate_election(db, election_id, current_user.id)
     return _lifecycle(election, changed)
 
 @router.post("/{election_id}/close", response_model=LifecycleResponse)
 async def close_election(
     election_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    admin: User = Depends(require_organizer),
+    current_user: User = Depends(get_current_user),
 ):
     """active → closed (достроково). Повторний запит — 200, changed=false."""
-    election, changed = await election_service.close_election(db, election_id, admin.id)
+    await _require_owner(db, election_id, current_user)
+    election, changed = await election_service.close_election(db, election_id, current_user.id)
     return _lifecycle(election, changed)
 
 @router.post("/{election_id}/results/publish", response_model=LifecycleResponse)
 async def publish_results(
     election_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    admin: User = Depends(require_organizer),
+    current_user: User = Depends(get_current_user),
 ):
     """Зробити результати видимими для виборців (лише після закриття)."""
-    election, changed = await election_service.set_results_published(db, election_id, admin.id, True)
+    await _require_owner(db, election_id, current_user)
+    election, changed = await election_service.set_results_published(db, election_id, current_user.id, True)
     return _lifecycle(election, changed)
 
 @router.post("/{election_id}/results/unpublish", response_model=LifecycleResponse)
 async def unpublish_results(
     election_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    admin: User = Depends(require_organizer),
+    current_user: User = Depends(get_current_user),
 ):
     """Приховати результати від виборців."""
-    election, changed = await election_service.set_results_published(db, election_id, admin.id, False)
+    await _require_owner(db, election_id, current_user)
+    election, changed = await election_service.set_results_published(db, election_id, current_user.id, False)
     return _lifecycle(election, changed)
 
 # --- Явка, результати, експорт, аудит ---
@@ -392,27 +426,30 @@ async def unpublish_results(
 async def get_turnout(
     election_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    admin: User = Depends(require_organizer),
+    current_user: User = Depends(get_current_user),
 ):
     """Явка відносно кола виборців (без результатів по кандидатах)."""
+    await _require_owner(db, election_id, current_user)
     return await VotingService.get_turnout(db, election_id)
 
 @router.get("/{election_id}/results", response_model=AdminElectionResultOut)
 async def get_admin_results(
     election_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    admin: User = Depends(require_organizer),
+    current_user: User = Depends(get_current_user),
 ):
     """Підсумки з явкою для організатора (після закриття, незалежно від публікації)."""
+    await _require_owner(db, election_id, current_user)
     return await VotingService.get_admin_results(db, election_id)
 
 @router.get("/{election_id}/results/export.csv")
 async def export_results_csv(
     election_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    admin: User = Depends(require_organizer),
+    current_user: User = Depends(get_current_user),
 ):
     """Агрегований CSV (без персональних даних). Факт експорту фіксується в журналі."""
+    await _require_owner(db, election_id, current_user)
     election, tally = await VotingService.get_admin_tally(db, election_id)
     rows = [
         {
@@ -429,7 +466,7 @@ async def export_results_csv(
         for cid, name, count in tally.rows
     ]
     content = build_results_csv(rows)
-    record_audit(db, action=AuditAction.RESULTS_EXPORTED, actor_id=admin.id, election_id=election.id)
+    record_audit(db, action=AuditAction.RESULTS_EXPORTED, actor_id=current_user.id, election_id=election.id)
     await db.commit()
     return Response(
         content=content,
@@ -443,18 +480,20 @@ async def get_audit_log(
     limit: int = Query(100, ge=1, le=500),
     offset: int = Query(0, ge=0),
     db: AsyncSession = Depends(get_db),
-    admin: User = Depends(require_organizer),
+    current_user: User = Depends(get_current_user),
 ):
     """Журнал дій для голосування (новіші спочатку). Зберігається й після видалення чернетки."""
+    await _require_owner(db, election_id, current_user, allow_deleted=True)
     return await list_audit(db, election_id, limit, offset)
 
 @router.get("/{election_id}/integrity", response_model=IntegrityReport)
 async def check_integrity(
     election_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    admin: User = Depends(require_organizer),
+    current_user: User = Depends(get_current_user),
 ):
     """Перевірка цілісності даних голосування (бюлетені ↔ участі, статуси, whitelist)."""
+    await _require_owner(db, election_id, current_user)
     issues = await validate_database(db, election_id)
     return IntegrityReport(
         ok=not any(i.severity == CRITICAL for i in issues),

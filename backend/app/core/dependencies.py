@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.jwt import decode_access_token
 from app.database import get_db
-from app.models.voting import User, UserRole
+from app.models.voting import User
 
 
 async def get_current_user(
@@ -26,13 +26,3 @@ async def get_current_user(
     if user is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
     return user
-
-
-async def require_organizer(current_user: User = Depends(get_current_user)) -> User:
-    """Administrative permissions come from the current database role."""
-    if current_user.role != UserRole.ADMIN:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Дія дозволена виключно організаторам голосувань",
-        )
-    return current_user

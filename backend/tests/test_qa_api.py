@@ -41,7 +41,7 @@ from app.database import get_db  # noqa: E402
 from app.main import app  # noqa: E402
 from app.core.jwt import create_access_token  # noqa: E402
 from app.models.enums import ElectionStatus, UserRole  # noqa: E402
-from app.models.voting import Ballot, Base, Election, User, VoterParticipation  # noqa: E402
+from app.models.voting import AuditLog, Ballot, Base, Election, User, VoterParticipation  # noqa: E402
 from app.services.closer import run_closer_loop  # noqa: E402
 
 PG_URL = os.getenv("TEST_DATABASE_URL")
@@ -255,9 +255,10 @@ class Week4AccessTests(ApiTestCase):
         """Без автентифікації адмін-API має відповідати 401/403."""
         self.assertEqual(await self._bad_statuses({"Cookie": ""}), [])
 
-    async def test_BUG1_voter_cannot_use_admin_api(self):
-        """Звичайний виборець із сесією не має доступу до /admin: очікується 403."""
-        self.assertEqual(await self._bad_statuses(vh(1001)), [])
+    async def test_authenticated_user_can_open_own_management_list(self):
+        response = await self.client.get(ADMIN, headers=vh(1001))
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), [])
 
     async def test_mock_auth_disabled_returns_401_everywhere(self):
         """Як у production: без mock-авторизації і виборчі, і адмін-ендпоінти дають 401."""
@@ -937,20 +938,22 @@ class SessionAuthenticationTests(ApiTestCase):
 
     async def test_user_id_header_cannot_impersonate_admin_or_voter(self):
         headers = {**vh(1001), "X-User-Id": str(ADMIN_ID)}
-        response = await self.client.get(ADMIN, headers=headers)
+        draft = await self.create_draft()
+        response = await self.client.get(f"{ADMIN}/{draft['id']}", headers=headers)
         self.assertEqual(response.status_code, 403)
         response = await self.client.get("/api/auth/me", headers=headers)
         self.assertEqual(response.json()["id"], str(voter_id(1001)))
         response = await self.client.get(ADMIN, headers={"Cookie": "", "X-User-Id": str(ADMIN_ID)})
         self.assertEqual(response.status_code, 401)
 
-    async def test_role_changes_apply_to_existing_session(self):
+    async def test_role_changes_do_not_remove_management_of_own_election(self):
+        draft = await self.create_draft()
         headers = session_headers(ADMIN_ID)
         self.assertEqual((await self.client.get(ADMIN, headers=headers)).status_code, 200)
         async with self.Session() as session:
             await session.execute(update(User).where(User.id == ADMIN_ID).values(role=UserRole.VOTER))
             await session.commit()
-        self.assertEqual((await self.client.get(ADMIN, headers=headers)).status_code, 403)
+        self.assertEqual((await self.client.get(f"{ADMIN}/{draft['id']}", headers=headers)).status_code, 200)
         response = await self.client.get("/api/auth/me", headers=headers)
         self.assertEqual(response.json()["role"], "voter")
 
@@ -979,7 +982,7 @@ class SessionAuthenticationTests(ApiTestCase):
             self.assertEqual(response.status_code, 200, response.text)
             self.assertEqual(response.json()["role"], "voter")
             self.assertEqual((await browser.get(PUBLIC)).status_code, 200)
-            self.assertEqual((await browser.get(ADMIN)).status_code, 403)
+            self.assertEqual((await browser.get(ADMIN)).status_code, 200)
 
     async def test_unknown_session_does_not_create_a_user(self):
         unknown_id = uuid.uuid4()
@@ -987,3 +990,91 @@ class SessionAuthenticationTests(ApiTestCase):
         self.assertEqual(response.status_code, 401)
         async with self.Session() as session:
             self.assertIsNone(await session.get(User, unknown_id))
+
+
+class ElectionOwnershipTests(ApiTestCase):
+    async def create_as(self, n):
+        now = datetime.now(timezone.utc)
+        response = await self.client.post(ADMIN, headers=vh(n), json={
+            "title": "Власні вибори", "starts_at": (now + HOUR).isoformat(),
+            "ends_at": (now + 2 * HOUR).isoformat(),
+            "candidates": [{"name": "Анна"}, {"name": "Богдан"}],
+        })
+        self.assertEqual(response.status_code, 201, response.text)
+        self.assertEqual(response.json()["created_by"], str(voter_id(n)))
+        return response.json()
+
+    async def test_each_user_sees_only_own_elections(self):
+        first, second = await self.create_as(1001), await self.create_as(1002)
+        for n, draft in [(1001, first), (1002, second)]:
+            response = await self.client.get(ADMIN, headers=vh(n))
+            self.assertEqual([e["id"] for e in response.json()], [draft["id"]])
+        # A legacy ADMIN is also restricted to their own elections.
+        self.assertEqual((await self.client.get(ADMIN)).json(), [])
+
+    async def test_nonowners_cannot_access_any_management_operation(self):
+        draft = await self.create_as(1001)
+        eid, cid = draft["id"], draft["candidates"][0]["id"]
+        operations = [
+            ("GET", "", None), ("PATCH", "", {"title": "Чужа зміна"}), ("DELETE", "", None),
+            ("POST", "/candidates", {"name": "Чужий кандидат"}),
+            ("DELETE", f"/candidates/{cid}", None),
+            ("GET", "/voters", None), ("POST", "/voters", {"emails": [voter_email(1002)]}),
+            ("DELETE", f"/voters/{uuid.uuid4()}", None),
+            *[("POST", suffix, None) for suffix in ["/activate", "/close", "/results/publish", "/results/unpublish"]],
+            *[("GET", suffix, None) for suffix in ["/turnout", "/results", "/results/export.csv", "/audit", "/integrity"]],
+        ]
+        async with self.Session() as session:
+            before = await session.scalar(select(func.count()).select_from(AuditLog).where(AuditLog.election_id == uuid.UUID(eid)))
+        for headers in [vh(1002), session_headers(ADMIN_ID)]:
+            for method, suffix, body in operations:
+                with self.subTest(role=headers, method=method, suffix=suffix):
+                    response = await self.client.request(method, f"{ADMIN}/{eid}{suffix}", headers=headers, json=body)
+                    self.assertEqual(response.status_code, 403, response.text)
+        election = await self.db_election(eid)
+        self.assertEqual(election.status, ElectionStatus.DRAFT)
+        self.assertEqual(election.title, "Власні вибори")
+        async with self.Session() as session:
+            after = await session.scalar(select(func.count()).select_from(AuditLog).where(AuditLog.election_id == uuid.UUID(eid)))
+        self.assertEqual(before, after)
+
+    async def test_voter_can_manage_full_lifecycle_of_own_election(self):
+        draft = await self.create_as(1001)
+        eid = draft["id"]
+        headers = vh(1001)
+        async def request(method, suffix, body=None, expected=200):
+            response = await self.client.request(method, f"{ADMIN}/{eid}{suffix}", headers=headers, json=body)
+            self.assertEqual(response.status_code, expected, response.text)
+            return response
+        await request("PATCH", "", {"title": "Оновлені вибори"})
+        candidate = (await request("POST", "/candidates", {"name": "Третій"}, 201)).json()
+        await request("DELETE", f"/candidates/{candidate['id']}", expected=204)
+        await request("POST", "/voters", {"emails": [voter_email(1001), voter_email(1002)]})
+        voters = (await request("GET", "/voters")).json()
+        removed = next(v for v in voters if v["email"] == voter_email(1002))
+        await request("DELETE", f"/voters/{removed['id']}", expected=204)
+        await request("POST", "/activate")
+        await self.set_window(eid, -HOUR, HOUR)
+        vote = await self.vote(eid, draft["candidates"][0]["id"], 1001)
+        self.assertEqual(vote.status_code, 200, vote.text)
+        await request("GET", "/turnout")
+        await request("POST", "/close")
+        await request("GET", "/results")
+        await request("POST", "/results/publish")
+        await request("GET", "/results/export.csv")
+        await request("POST", "/results/unpublish")
+        await request("GET", "/audit")
+        await request("GET", "/integrity")
+        # Existing lifecycle constraints still apply to the creator.
+        await request("PATCH", "", {"title": "Пізня зміна"}, 400)
+
+    async def test_deleted_draft_audit_remains_private_to_creator(self):
+        draft = await self.create_as(1001)
+        eid = draft["id"]
+        deleted = await self.client.delete(f"{ADMIN}/{eid}", headers=vh(1001))
+        self.assertEqual(deleted.status_code, 204)
+        self.assertEqual((await self.client.get(f"{ADMIN}/{eid}/audit", headers=vh(1001))).status_code, 200)
+        for headers in [vh(1002), session_headers(ADMIN_ID)]:
+            response = await self.client.get(f"{ADMIN}/{eid}/audit", headers=headers)
+            self.assertEqual(response.status_code, 403)
+        self.assertEqual((await self.client.get(f"{ADMIN}/{uuid.uuid4()}/audit", headers=vh(1001))).status_code, 404)
