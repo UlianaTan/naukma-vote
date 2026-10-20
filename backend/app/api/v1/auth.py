@@ -1,7 +1,8 @@
 from fastapi import APIRouter, Depends, HTTPException, Response, Request, status, Cookie, Query
-from fastapi.responses import RedirectResponse
+from fastapi.responses import RedirectResponse, JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
+from sqlalchemy.exc import SQLAlchemyError
 import httpx
 import urllib.parse
 
@@ -13,6 +14,7 @@ from app.core.jwt import create_access_token
 from app.core.dependencies import get_current_user
 from app.core.config import get_settings
 from app.middleware.csrf import csrf_protect
+from app.services.google_oauth import OAuthFailure, validate_profile, resolve_google_user
 
 import uuid
 import secrets
@@ -47,126 +49,152 @@ async def login(response: Response, db: AsyncSession = Depends(get_db), x_user_i
     return {"status": "ok"}
 
 
+def _frontend_target(target: str | None = None) -> str | None:
+    origins = get_settings().frontend_origins
+    for candidate in (target, *origins):
+        if not candidate or "\\" in candidate or any(ord(c) < 32 for c in candidate):
+            continue
+        try:
+            parsed = urllib.parse.urlsplit(candidate)
+            origin = f"{parsed.scheme}://{parsed.netloc}"
+            if parsed.scheme in {"http", "https"} and not parsed.username and not parsed.password and origin in origins:
+                return candidate
+        except ValueError:
+            continue
+    return None
+
+
+def _clear_oauth(response: Response) -> Response:
+    for name in ("oauth_state", "oauth_next"):
+        response.delete_cookie(name, path="/", secure=get_settings().cookie_secure,
+                               httponly=True, samesite="lax")
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    return response
+
+
+def _oauth_error(code: str, target: str | None = None) -> Response:
+    frontend = _frontend_target(target)
+    if frontend:
+        parsed = urllib.parse.urlsplit(frontend)
+        url = urllib.parse.urlunsplit((parsed.scheme, parsed.netloc, "/login",
+                                      urllib.parse.urlencode({"error": code}), ""))
+        response = RedirectResponse(url, status_code=303)
+    else:
+        response = JSONResponse({"detail": "Authentication is not configured"}, status_code=503)
+    return _clear_oauth(response)
+
+
+def _google_configured() -> bool:
+    settings = get_settings()
+    if not all(value.strip() for value in (settings.google_client_id, settings.google_client_secret,
+                                           settings.google_redirect_uri)):
+        return False
+    try:
+        uri = urllib.parse.urlsplit(settings.google_redirect_uri)
+        return bool(uri.hostname and not uri.username and not uri.password and not uri.query and not uri.fragment
+                    and uri.path == "/api/auth/google/callback"
+                    and (uri.scheme == "https" or (settings.app_env == "local" and uri.scheme == "http"))
+                    and _frontend_target() and len(settings.session_secret.encode()) >= 32
+                    and settings.access_expires_seconds > 0 and settings.refresh_expires_seconds > 0
+                    and settings.cookie_samesite)
+    except ValueError:
+        return False
+
+
 @router.get("/google/login")
 async def google_login(next: str | None = Query(None)):
-    """Redirects user to Google OAuth consent screen.
-
-    Optional `next` param (frontend URL) will be used as post-login redirect.
-    """
+    """Start a short-lived, browser-bound Google authorization attempt."""
     settings = get_settings()
-    if not settings.google_client_id or not settings.google_redirect_uri:
-        raise HTTPException(status_code=500, detail="Google OAuth not configured")
-
-    # Determine redirect target after callback — must be one of configured frontend_origins
-    frontend_origins = tuple(settings.frontend_origins)
-    default_redirect = frontend_origins[0] if frontend_origins else "/"
-    redirect_target = next or default_redirect
-    # Validate redirect_target is allowed origin
-    parsed = urllib.parse.urlparse(redirect_target)
-    origin = f"{parsed.scheme}://{parsed.netloc}" if parsed.scheme and parsed.netloc else ""
-    if origin not in frontend_origins:
-        # fallback to default
-        redirect_target = default_redirect
-
+    if not _google_configured():
+        return _oauth_error("auth_unavailable")
+    redirect_target = _frontend_target(next)
     state = secrets.token_urlsafe(32)
     params = {
         "client_id": settings.google_client_id,
         "redirect_uri": settings.google_redirect_uri,
         "response_type": "code",
-        "scope": "openid email profile",
-        "access_type": "offline",
-        "prompt": "consent",
+        "scope": "openid email",
+        "prompt": "select_account",
         "state": state,
     }
+    if settings.allowed_email_domain:
+        # A UI hint only; validate the returned Workspace membership below.
+        params["hd"] = settings.allowed_email_domain
     url = httpx.URL("https://accounts.google.com/o/oauth2/v2/auth").copy_merge_params(params)
-    resp = RedirectResponse(str(url))
-    # store state and next in short-lived cookies (httponly)
-    secure = settings.cookie_secure
-    resp.set_cookie("oauth_state", state, httponly=True, samesite="lax", secure=secure, max_age=600)
-    resp.set_cookie("oauth_next", redirect_target, httponly=True, samesite="lax", secure=secure, max_age=600)
-    return resp
+    response = RedirectResponse(str(url), status_code=303)
+    for name, value in (("oauth_state", state), ("oauth_next", redirect_target)):
+        response.set_cookie(name, value, path="/", httponly=True, samesite="lax",
+                            secure=settings.cookie_secure, max_age=600)
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    return response
 
 
 @router.get("/google/callback")
-async def google_callback(code: str | None = None, state: str | None = None, oauth_state: str | None = Cookie(None), oauth_next: str | None = Cookie(None), db: AsyncSession = Depends(get_db)):
+async def google_callback(code: str | None = None, state: str | None = None,
+                          error: str | None = None, oauth_state: str | None = Cookie(None),
+                          oauth_next: str | None = Cookie(None), db: AsyncSession = Depends(get_db)):
     settings = get_settings()
-    if not code or not state:
-        raise HTTPException(status_code=400, detail="Missing code or state")
-    if not oauth_state or oauth_state != state:
-        raise HTTPException(status_code=400, detail="Invalid OAuth state")
-
-    # Exchange code for tokens
-    token_url = "https://oauth2.googleapis.com/token"
-    async with httpx.AsyncClient() as client:
-        try:
-            token_resp = await client.post(
-                token_url,
-                data={
-                    "code": code,
-                    "client_id": settings.google_client_id,
-                    "client_secret": settings.google_client_secret,
-                    "redirect_uri": settings.google_redirect_uri,
-                    "grant_type": "authorization_code",
-                },
-                headers={"Accept": "application/json"},
-                timeout=10.0,
-            )
-        except Exception:
-            raise HTTPException(status_code=502, detail="Failed to contact Google token endpoint")
-    if token_resp.status_code != 200:
-        raise HTTPException(status_code=400, detail="Failed to exchange code for token")
-    token_data = token_resp.json()
-    access_token_google = token_data.get("access_token")
-    if not access_token_google:
-        raise HTTPException(status_code=400, detail="No access token from Google")
-
-    # Fetch userinfo
-    userinfo_url = "https://openidconnect.googleapis.com/v1/userinfo"
-    async with httpx.AsyncClient() as client:
-        userinfo_resp = await client.get(userinfo_url, headers={"Authorization": f"Bearer {access_token_google}"}, timeout=10.0)
-    if userinfo_resp.status_code != 200:
-        raise HTTPException(status_code=400, detail="Failed to fetch userinfo from Google")
-    userinfo = userinfo_resp.json()
-    email = userinfo.get("email")
-    email_verified = userinfo.get("email_verified", False)
-
-    if not email or not email_verified:
-        raise HTTPException(status_code=400, detail="Email not verified by Google")
-
-    # Domain check
-    allowed_domain = settings.allowed_email_domain
-    if allowed_domain and "@" in email and email.split("@", 1)[1].lower() != allowed_domain.lower():
-        raise HTTPException(status_code=403, detail="Email domain not allowed")
-
-    # Lookup or create user
+    # Validate the browser binding even for provider errors. Never reflect error_description.
+    if (not state or not oauth_state or len(state) > 256 or len(oauth_state) > 256
+            or not secrets.compare_digest(state.encode(), oauth_state.encode())):
+        return _oauth_error("invalid_state")
+    if error:
+        return _oauth_error("access_denied" if error == "access_denied" else "oauth_failed", oauth_next)
+    if not code or len(code) > 4096:
+        return _oauth_error("oauth_failed", oauth_next)
+    if not _google_configured():
+        return _oauth_error("auth_unavailable", oauth_next)
     try:
-        res = await db.execute(select(User).where(User.email == email))
-        user = res.scalar_one_or_none()
-        if not user:
-            user = User(email=email)
-            db.add(user)
-            await db.commit()
-            await db.refresh(user)
-    except Exception:
-        raise HTTPException(status_code=500, detail="Database error while creating user")
-
-    # Issue our tokens and set cookies
-    access = create_access_token(str(user.id))
-    refresh = await create_refresh_token(db, str(user.id))
-
-    # Determine redirect target (validate against allowed origins)
-    redirect_target = oauth_next or (tuple(settings.frontend_origins)[0] if settings.frontend_origins else "/")
-    parsed = urllib.parse.urlparse(redirect_target)
-    origin = f"{parsed.scheme}://{parsed.netloc}" if parsed.scheme and parsed.netloc else ""
-    frontend_origins = tuple(settings.frontend_origins)
-    if origin not in frontend_origins:
-        redirect_target = frontend_origins[0] if frontend_origins else "/"
-
-    response = RedirectResponse(url=redirect_target)
+        async with httpx.AsyncClient() as client:
+            token_response = await client.post(
+                "https://oauth2.googleapis.com/token",
+                data={"code": code, "client_id": settings.google_client_id,
+                      "client_secret": settings.google_client_secret,
+                      "redirect_uri": settings.google_redirect_uri, "grant_type": "authorization_code"},
+                headers={"Accept": "application/json"}, timeout=10.0,
+            )
+            if token_response.status_code != 200:
+                raise OAuthFailure("google_unavailable" if token_response.status_code >= 500 else "oauth_failed")
+            token_data = token_response.json()
+            access = token_data.get("access_token") if isinstance(token_data, dict) else None
+            if not isinstance(access, str) or not access:
+                raise OAuthFailure("oauth_failed")
+            profile_response = await client.get(
+                "https://openidconnect.googleapis.com/v1/userinfo",
+                headers={"Authorization": f"Bearer {access}"}, timeout=10.0,
+            )
+            if profile_response.status_code != 200:
+                raise OAuthFailure("google_unavailable" if profile_response.status_code >= 500 else "oauth_failed")
+            profile = profile_response.json()
+            subject, email = validate_profile(profile, settings.allowed_email_domain)
+            email_domain = email.rsplit("@", 1)[1]
+            # Google is authoritative for Gmail and matching Workspace domains.
+            # A third-party email_verified alone must not claim a legacy account.
+            hosted_domain = profile.get("hd")
+            link_legacy = email_domain == "gmail.com" or (
+                isinstance(hosted_domain, str) and hosted_domain.lower() == email_domain
+            )
+    except httpx.RequestError:
+        return _oauth_error("google_unavailable", oauth_next)
+    except ValueError:
+        return _oauth_error("oauth_failed", oauth_next)
+    except OAuthFailure as exc:
+        return _oauth_error(exc.code, oauth_next)
+    try:
+        user = await resolve_google_user(db, subject, email, link_legacy=link_legacy)
+        access = create_access_token(str(user.id))
+        refresh = await create_refresh_token(db, str(user.id))
+    except OAuthFailure as exc:
+        await db.rollback()
+        return _oauth_error(exc.code, oauth_next)
+    except SQLAlchemyError:
+        await db.rollback()
+        return _oauth_error("auth_unavailable", oauth_next)
+    response = RedirectResponse(url=_frontend_target(oauth_next), status_code=303)
     set_session_cookies(response, access, refresh)
-    response.delete_cookie("oauth_state", secure=settings.cookie_secure, httponly=True, samesite="lax")
-    response.delete_cookie("oauth_next", secure=settings.cookie_secure, httponly=True, samesite="lax")
-    return response
+    return _clear_oauth(response)
 
 
 @router.post("/refresh", dependencies=[Depends(csrf_protect)])

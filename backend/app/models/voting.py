@@ -34,6 +34,12 @@ class User(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     email = Column(String(255), unique=True, nullable=False, index=True)
     role = Column(Enum(UserRole), default=UserRole.VOTER, nullable=False)
+    google_sub = Column(String(255), nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint("google_sub", name="uq_users_google_sub"),
+        Index("uq_users_email_normalized", func.lower(func.ltrim(func.rtrim(email))), unique=True),
+    )
 
 
 class Election(Base):

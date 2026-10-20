@@ -30,7 +30,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   function login() {
-    window.location.href = `${API_BASE_URL}/api/auth/google/login`;
+    const next = encodeURIComponent(`${window.location.origin}/`);
+    window.location.href = `${API_BASE_URL}/api/auth/google/login?next=${next}`;
   }
 
   async function logout() {

@@ -76,8 +76,8 @@ def get_settings() -> Settings:
     return Settings(
         app_env=app_env,
         frontend_origins=origins,
-        # Mock-авторизація (X-User-Id) за замовчуванням вимкнена в production.
-        allow_mock_auth=_env_bool("ALLOW_MOCK_AUTH", app_env != "production"),
+        # Mock-авторизація (X-User-Id) за замовчуванням дозволена лише локально.
+        allow_mock_auth=_env_bool("ALLOW_MOCK_AUTH", app_env == "local"),
         closer_enabled=_env_bool("ELECTION_CLOSER_ENABLED", True),
         closer_interval_seconds=max(1.0, _env_float("ELECTION_CLOSER_INTERVAL_SECONDS", 5.0)),
         allowed_email_domain=os.getenv("ALLOWED_EMAIL_DOMAIN", "ukma.edu.ua").strip().lstrip("@").lower(),

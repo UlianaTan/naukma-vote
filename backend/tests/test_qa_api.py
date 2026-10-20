@@ -1088,8 +1088,8 @@ class BrowserSessionTests(ApiTestCase):
         return response
 
     async def test_staging_cookie_attributes_and_oauth_state(self):
-        env = {"APP_ENV": "staging", "SESSION_COOKIE_SAMESITE": "none",
-               "GOOGLE_CLIENT_ID": "test-client", "GOOGLE_REDIRECT_URI": "https://backend.test/api/auth/google/callback"}
+        env = {"APP_ENV": "staging", "FRONTEND_ORIGIN": "https://frontend.test", "SESSION_COOKIE_SAMESITE": "none",
+               "GOOGLE_CLIENT_ID": "test-client", "GOOGLE_CLIENT_SECRET": "test-secret", "GOOGLE_REDIRECT_URI": "https://backend.test/api/auth/google/callback"}
         with mock.patch.dict(os.environ, env):
             async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="https://backend.test") as browser:
                 login = await self.browser_login(browser)
@@ -1101,7 +1101,7 @@ class BrowserSessionTests(ApiTestCase):
                     self.assertNotIn("Domain=", value)
                 self.assertEqual((await browser.get("/api/auth/me")).status_code, 200)
                 oauth = await browser.get("/api/auth/google/login")
-                self.assertEqual(oauth.status_code, 307)
+                self.assertEqual(oauth.status_code, 303)
                 for value in oauth.headers.get_list("set-cookie"):
                     for attribute in ["Secure", "HttpOnly", "SameSite=lax", "Max-Age=600"]:
                         self.assertIn(attribute, value)
@@ -1154,7 +1154,7 @@ class BrowserSessionTests(ApiTestCase):
         from app.api.v1 import auth
         from urllib.parse import parse_qs, urlparse
         env = {"APP_ENV": "staging", "FRONTEND_ORIGIN": "https://frontend.test",
-               "SESSION_COOKIE_SAMESITE": "none", "GOOGLE_CLIENT_ID": "test-client",
+               "SESSION_COOKIE_SAMESITE": "none", "GOOGLE_CLIENT_ID": "test-client", "GOOGLE_CLIENT_SECRET": "test-secret",
                "GOOGLE_REDIRECT_URI": "https://backend.test/api/auth/google/callback"}
         with mock.patch.dict(os.environ, env):
             async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="https://backend.test") as browser:
@@ -1162,13 +1162,13 @@ class BrowserSessionTests(ApiTestCase):
                 state = parse_qs(urlparse(redirect.headers["location"]).query)["state"][0]
                 google = mock.MagicMock()
                 google.post = mock.AsyncMock(return_value=httpx.Response(200, json={"access_token": "google-test-token"}))
-                google.get = mock.AsyncMock(return_value=httpx.Response(200, json={"email": voter_email(1001), "email_verified": True}))
+                google.get = mock.AsyncMock(return_value=httpx.Response(200, json={"sub": "google-test-1001", "email": voter_email(1001), "email_verified": True, "hd": "ukma.edu.ua"}))
                 context = mock.MagicMock()
                 context.__aenter__ = mock.AsyncMock(return_value=google)
                 context.__aexit__ = mock.AsyncMock(return_value=False)
                 with mock.patch.object(auth.httpx, "AsyncClient", return_value=context):
                     callback = await browser.get("/api/auth/google/callback", params={"code": "test-code", "state": state})
-                self.assertEqual(callback.status_code, 307, callback.text)
+                self.assertEqual(callback.status_code, 303, callback.text)
                 self.assertEqual(callback.headers["location"], "https://frontend.test")
                 for name in ["access_token", "refresh_token", "csrf_token"]:
                     value = next(c for c in callback.headers.get_list("set-cookie") if c.startswith(name + "="))
