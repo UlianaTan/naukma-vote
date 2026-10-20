@@ -1,8 +1,9 @@
 import type { AdminElection, ElectionTurnout } from '../../services/adminApi';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { Users, ShieldCheck } from 'lucide-react';
 import { adminApi } from '../../services/adminApi';
+import { adminError, adminStatus } from '../../services/adminForm';
 import { ConfirmModal } from '../../components/ui/ConfirmModal'; 
 
 export function ElectionMonitoringPage() {
@@ -14,37 +15,37 @@ export function ElectionMonitoringPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [isCloseModalOpen, setIsCloseModalOpen] = useState(false);
 
-  // Завантажуємо деталі голосування та поточну явку з бекенду
-  useEffect(() => {
-    if (id) {
-      Promise.all([
-        adminApi.getElectionDetail(id),
-        adminApi.getTurnout(id)
-      ])
-        .then(([electionData, turnoutData]) => {
-          setElection(electionData);
-          setTurnout(turnoutData);
-        })
-        .catch(err => {
-          console.error("Помилка завантаження даних моніторингу:", err);
-        })
-        .finally(() => {
-          setIsLoading(false);
-        });
-    }
-  }, [id]);
+  const [error, setError] = useState('');
+  const [updated, setUpdated] = useState<string | null>(null);
+  const [refresh, setRefresh] = useState(0);
+  const [busy, setBusy] = useState(false);
+  const closing = useRef(false);
 
-  // Дострокове закриття голосування
-  const handleCloseElection = async () => {
-    if (id) {
+  useEffect(() => {
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout>;
+    async function load() {
+      if (!id) return;
       try {
-        await adminApi.closeElection(id);
-        navigate(`/admin/results/${id}`);
-      } catch (err) {
-        console.error("Помилка дострокового закриття:", err);
-        alert("Не вдалося закрити голосування.");
+        const [details, counts] = await Promise.all([adminApi.getElectionDetail(id), adminApi.getTurnout(id)]);
+        if (cancelled) return;
+        setElection(details); setTurnout(counts); setError('');
+        setUpdated(new Date().toLocaleTimeString('uk-UA'));
+      } catch (error) { if (!cancelled) setError(adminError(error) + ' Показані дані можуть бути застарілими.'); }
+      finally {
+        if (!cancelled) { setIsLoading(false); timer = setTimeout(load, 15000); }
       }
     }
+    void load();
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [id, refresh]);
+
+  const handleCloseElection = async () => {
+    if (!id || closing.current) return;
+    closing.current = true; setBusy(true);
+    try { await adminApi.closeElection(id); navigate(`/admin/results/${id}`); }
+    catch (error) { setError(adminError(error)); setRefresh(value => value + 1); }
+    finally { closing.current = false; setBusy(false); }
   };
 
   if (isLoading) {
@@ -56,7 +57,7 @@ export function ElectionMonitoringPage() {
   }
 
   if (!election || !turnout) {
-    return <div role="alert" className="p-8 text-red-700">Не вдалося завантажити дані голосування. Перевірте доступ і спробуйте оновити сторінку.</div>;
+    return <div role="alert" className="p-8 text-red-700">{error || "Не вдалося завантажити дані."} <button onClick={() => setRefresh(value => value + 1)}>Повторити</button></div>;
   }
 
   const totalVoters = turnout?.eligible_count ?? 0;
@@ -65,6 +66,11 @@ export function ElectionMonitoringPage() {
 
   return (
     <div className="flex flex-col w-full">
+      {error && <p role="alert" className="mb-4 text-red-700">{error}</p>}
+      <div className="mb-4 flex gap-4"><button disabled={busy} onClick={() => setRefresh(value => value + 1)}>Оновити дані</button>
+      {updated && <span>Оновлено о {updated}. Автоматичне оновлення кожні 15 секунд.</span>}</div>
+      {election.status === 'closed' && <button className="mb-4 underline" onClick={() => navigate(`/admin/results/${id}`)}>Перейти до результатів</button>}
+      {election.status === 'draft' && <button className="mb-4 underline" onClick={() => navigate(`/admin/edit/${id}`)}>Налаштувати й запустити чернетку</button>}
       <div className="mb-8">
         <button 
           onClick={() => navigate('/admin')}
@@ -77,7 +83,7 @@ export function ElectionMonitoringPage() {
             {election?.title || "Вибори"}
           </h1>
           <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-[#E6F4EA] text-[#137333] text-sm font-medium">
-            <span className="w-1.5 h-1.5 rounded-full bg-[#137333]"></span> Активне
+            <span className="w-1.5 h-1.5 rounded-full bg-[#137333]"></span> {adminStatus(election)}
           </span>
         </div>
       </div>
@@ -112,10 +118,10 @@ export function ElectionMonitoringPage() {
 
       <div className="bg-[#F0F7FF] border border-[#BFDBFE] rounded-2xl p-5 flex items-center gap-3.5 text-[#1E3A8A] text-sm font-medium mb-6">
         <ShieldCheck className="w-5 h-5 text-[#1D4ED8] flex-shrink-0" />
-        <span>З міркувань приватності вибір студентів зашифровано. Редагувати дані заборонено.</span>
+        <span>Бюлетені зберігаються окремо від записів про участь. Після активації змінювати параметри голосування не можна.</span>
       </div>
 
-      <div className="bg-white border border-red-200 rounded-[20px] p-6 shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+      {election.status === 'active' && <div className="bg-white border border-red-200 rounded-[20px] p-6 shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <h3 className="text-base font-bold text-slate-900 mb-1">
             Дострокове завершення
@@ -126,12 +132,13 @@ export function ElectionMonitoringPage() {
         </div>
         
         <button 
+          disabled={busy}
           onClick={() => setIsCloseModalOpen(true)}
           className="px-5 py-2.5 bg-[#DC2626] text-white rounded-lg text-sm font-semibold hover:bg-red-700 transition-colors flex-shrink-0 shadow-sm"
         >
           Достроково закрити голосування
         </button>
-      </div>
+      </div>}
 
       <ConfirmModal 
         isOpen={isCloseModalOpen}
