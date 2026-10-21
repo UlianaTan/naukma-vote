@@ -1,6 +1,7 @@
 ﻿import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { Toaster } from 'react-hot-toast'; // 1. Імпортуємо Toaster
 import { AuthProvider, useAuth } from './features/voter/hooks/useAuth';
+import { PasswordSetupGate } from './features/voter/components/PasswordSetupGate';
 import { LoginPage } from './features/voter/pages/LoginPage';
 import { ElectionsListPage } from './features/voter/pages/ElectionsListPage';
 import { VotingPage } from './features/voter/pages/VotingPage';
@@ -44,6 +45,7 @@ function App() {
           }} 
         />
         
+        <PasswordSetupGate>
         <Routes>
           {/* Студентські маршрути */}
           <Route path="/login" element={<LoginPage />} />
@@ -69,6 +71,7 @@ function App() {
           {/* Усі інші невідомі шляхи направляємо на головну */}
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
+        </PasswordSetupGate>
       </AuthProvider>
     </BrowserRouter>
   );

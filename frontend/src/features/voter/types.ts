@@ -2,6 +2,7 @@ export interface User {
   id: string;
   email: string;
   role: "voter" | "admin";
+  needs_password_setup: boolean;
 }
 
 export type ElectionStatus = "draft" | "active" | "closed";

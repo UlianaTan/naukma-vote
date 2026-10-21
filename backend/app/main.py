@@ -66,7 +66,7 @@ app = FastAPI(
 
 @app.exception_handler(RequestValidationError)
 async def validation_error(request: Request, exc: RequestValidationError):
-    if request.url.path in {"/api/auth/login", "/api/auth/register"}:
+    if request.url.path in {"/api/auth/login", "/api/auth/register", "/api/auth/password"}:
         return JSONResponse(status_code=422, content={"detail": [
             {"type": error["type"], "loc": list(error["loc"]), "msg": error["msg"]}
             for error in exc.errors()

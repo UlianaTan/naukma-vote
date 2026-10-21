@@ -14,6 +14,7 @@ interface AuthContextValue {
   loginWithPassword: (email: string, password: string) => Promise<void>;
   register: (email: string, password: string) => Promise<void>;
   clearError: () => void;
+  setupPassword: (password: string) => Promise<void>;
   logout: () => Promise<void>;
 }
 
@@ -105,6 +106,31 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }
 
+  async function setupPassword(password: string) {
+    setError(null);
+    const epoch = sessionEpoch();
+    try {
+      const result = await api.post<{ user: User }>("/api/auth/password", { password });
+      assertSessionEpoch(epoch);
+      setUser(result.user);
+    } catch (e) {
+      if (epoch !== sessionEpoch()) throw e;
+      // Another tab (or a lost success response) may have completed setup already.
+      if (e instanceof ApiError && e.status === 409) {
+        const current = await api.get<User>("/api/auth/me").catch(() => null);
+        assertSessionEpoch(epoch);
+        if (current && current.needs_password_setup === false) {
+          setUser(current);
+          return;
+        }
+      }
+      setError(e instanceof ApiError && e.status === 422
+        ? "Пароль має містити від 12 до 1024 символів."
+        : "Не вдалося зберегти пароль. Перевірте з’єднання та повторіть спробу.");
+      throw e;
+    }
+  }
+
   async function logout() {
     setError(null);
     try {
@@ -118,7 +144,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }
 
   return (
-    <AuthContext.Provider value={{ user, isLoading, error, sessionError, retrySession, login, loginWithPassword, register, clearError: () => setError(null), logout }}>
+    <AuthContext.Provider value={{ user, isLoading, error, sessionError, retrySession, login, loginWithPassword, register, setupPassword, clearError: () => setError(null), logout }}>
       {children}
     </AuthContext.Provider>
   );
