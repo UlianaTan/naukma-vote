@@ -35,6 +35,7 @@ class User(Base):
     email = Column(String(255), unique=True, nullable=False, index=True)
     role = Column(Enum(UserRole), default=UserRole.VOTER, nullable=False)
     google_sub = Column(String(255), nullable=True)
+    password_hash = Column(String(255), nullable=True)
 
     __table_args__ = (
         UniqueConstraint("google_sub", name="uq_users_google_sub"),

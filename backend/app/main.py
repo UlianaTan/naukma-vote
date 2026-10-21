@@ -4,6 +4,9 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Request, Response, Depends
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.exceptions import RequestValidationError
+from fastapi.exception_handlers import request_validation_exception_handler
+from fastapi.responses import JSONResponse
 
 from app.api.v1.admin_elections import router as admin_elections_router
 from app.api.v1.elections import router as elections_router
@@ -59,6 +62,16 @@ app = FastAPI(
     description="Elections & Voting Core API with guaranteed voter anonymity",
     lifespan=lifespan,
 )
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_error(request: Request, exc: RequestValidationError):
+    if request.url.path in {"/api/auth/login", "/api/auth/register"}:
+        return JSONResponse(status_code=422, content={"detail": [
+            {"type": error["type"], "loc": list(error["loc"]), "msg": error["msg"]}
+            for error in exc.errors()
+        ]}, headers={"Cache-Control": "no-store"})
+    return await request_validation_exception_handler(request, exc)
 
 # Дозволені адреси фронтенду: FRONTEND_ORIGIN (+ localhost лише для local)
 # Налаштування CORS без wildcard з credentials

@@ -1,8 +1,13 @@
 from fastapi import APIRouter, Depends, HTTPException, Response, Request, status, Cookie, Query
 from fastapi.responses import RedirectResponse, JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
+from starlette.concurrency import run_in_threadpool
+
+from app.models.enums import UserRole
+from app.schemas.auth import LoginRequest, RegistrationRequest
+from app.services.passwords import hash_password, verify_password
 import httpx
 import urllib.parse
 
@@ -22,11 +27,59 @@ import secrets
 router = APIRouter()
 
 
+def _check_auth_origin(request: Request) -> None:
+    origin = request.headers.get("origin")
+    if origin and origin not in get_settings().frontend_origins:
+        raise HTTPException(status_code=403, detail="Origin not allowed")
+
+
+async def _password_session(db: AsyncSession, response: Response, user: User) -> dict:
+    access = create_access_token(str(user.id))
+    refresh = await create_refresh_token(db, str(user.id))
+    set_session_cookies(response, access, refresh)
+    return {"status": "ok", "user": {
+        "id": str(user.id), "email": user.email, "role": user.role.value}}
+
+
+@router.post("/register", status_code=status.HTTP_201_CREATED)
+async def register(credentials: RegistrationRequest, response: Response, request: Request,
+                   db: AsyncSession = Depends(get_db)):
+    """Create a password account without email verification (product decision)."""
+    _check_auth_origin(request)
+    email = str(credentials.email).strip().lower()
+    # Match the university domain exactly; do not accept subdomains or suffixes.
+    if email.rsplit("@", 1)[1] != get_settings().allowed_email_domain:
+        raise HTTPException(status_code=400, detail="Registration is available only for university email addresses")
+    existing = await db.scalar(select(User.id).where(
+        func.lower(func.ltrim(func.rtrim(User.email))) == email))
+    if existing is not None:
+        raise HTTPException(status_code=409, detail="Email is already registered")
+    user = User(email=email, role=UserRole.VOTER,
+                password_hash=await run_in_threadpool(hash_password, credentials.password))
+    db.add(user)
+    try:
+        await db.commit()
+        await db.refresh(user)
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(status_code=409, detail="Email is already registered") from None
+    return await _password_session(db, response, user)
+
+
 @router.post("/login")
-async def login(response: Response, db: AsyncSession = Depends(get_db), x_user_id: str | None = None):
-    """Mock login for local development. Creates user if missing and issues tokens.
-    Expects ALLOW_MOCK_AUTH=true for use.
-    """
+async def login(response: Response, request: Request, credentials: LoginRequest | None = None,
+                db: AsyncSession = Depends(get_db), x_user_id: str | None = None):
+    """Password login; an empty body retains the explicitly enabled local mock API."""
+    _check_auth_origin(request)
+    if credentials is not None:
+        email = str(credentials.email).strip().lower()
+        user = await db.scalar(select(User).where(
+            func.lower(func.ltrim(func.rtrim(User.email))) == email))
+        valid = await run_in_threadpool(
+            verify_password, credentials.password, user.password_hash if user else None)
+        if not valid:
+            raise HTTPException(status_code=401, detail="Invalid email or password")
+        return await _password_session(db, response, user)
     settings = get_settings()
     if not settings.allow_mock_auth:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Mock login disabled")

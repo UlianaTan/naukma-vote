@@ -57,7 +57,9 @@ async def resolve_google_user(
                 elif email_user.google_sub is not None:
                     raise OAuthFailure("account_conflict")
                 else:
-                    if not link_legacy:
+                    # A password signup does not verify email ownership. Never
+                    # silently share its password access with a Google identity.
+                    if email_user.password_hash is not None or not link_legacy:
                         raise OAuthFailure("account_conflict")
                     user_id = email_user.id
                     claimed = await db.execute(update(User).where(

@@ -45,7 +45,7 @@ export function isMutation(method = 'GET') {
   return !['GET', 'HEAD', 'OPTIONS'].includes(method.toUpperCase());
 }
 export function canRefresh(path: string) {
-  return !['/api/auth/login', '/api/auth/refresh', '/api/auth/logout', '/api/auth/csrf', '/api/auth/google/']
+  return !['/api/auth/login', '/api/auth/register', '/api/auth/refresh', '/api/auth/logout', '/api/auth/csrf', '/api/auth/google/']
     .some(endpoint => path.startsWith(endpoint));
 }
 export function isCsrfMismatch(status: number, data: unknown) {
@@ -124,7 +124,7 @@ export async function sessionFetch(path: string, options: RequestInit): Promise<
   const requestVersion = version;
   const requestEpoch = epoch;
   const headers = new Headers(options.headers);
-  const mutation = isMutation(options.method) && path !== '/api/auth/login';
+  const mutation = isMutation(options.method) && !['/api/auth/login', '/api/auth/register'].includes(path);
   const logout = path === '/api/auth/logout';
   async function prepareCsrf() {
     try { headers.set('X-CSRF-Token', await getCsrfToken()); }

@@ -283,3 +283,20 @@ test('failed logout keeps the local session; successful logout clears it', async
   await api.post('/api/auth/logout');
   assert.equal(sessionVersion(), before + 1);
 });
+
+test('login and registration do not require a prior session or trigger refresh', async () => {
+  clearSession();
+  const calls = mockServer(() => response(200));
+  await sessionFetch('/api/auth/login', { method: 'POST', body: '{}' });
+  await sessionFetch('/api/auth/register', { method: 'POST', body: '{}' });
+  assert.deepEqual(calls.map(call => call.path), ['/api/auth/login', '/api/auth/register']);
+});
+
+
+test('invalid password does not refresh or reuse an old logged-in session', async () => {
+  clearSession();
+  const calls = mockServer(() => response(401));
+  await assert.rejects(sessionFetch('/api/auth/login', { method: 'POST', body: '{}' }), { status: 401 });
+  await assert.rejects(sessionFetch('/api/auth/register', { method: 'POST', body: '{}' }), { status: 401 });
+  assert.deepEqual(calls.map(call => call.path), ['/api/auth/login', '/api/auth/register']);
+});
