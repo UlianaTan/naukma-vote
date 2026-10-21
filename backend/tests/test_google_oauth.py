@@ -31,7 +31,9 @@ class GoogleOAuthTests(ApiTestCase):
         response = await self.browser.get('/api/auth/google/login', params={'next': target} if target else {})
         self.assertEqual(response.status_code, 303, response.text)
         self.assertEqual(response.headers['cache-control'], 'no-store')
-        return parse_qs(urlsplit(response.headers['location']).query)['state'][0]
+        params = parse_qs(urlsplit(response.headers['location']).query)
+        self.assertNotIn('hd', params)
+        return params['state'][0]
 
     @contextmanager
     def google(self, profile=None, token=None, post_error=None, get_error=None):
@@ -128,7 +130,8 @@ class GoogleOAuthTests(ApiTestCase):
                  ({'email_verified': 'true'}, 'unverified_email'),
                  ({'email': 'not-an-email'}, 'invalid_profile'),
                  ({'email': 'voter@gmail.com'}, 'invalid_domain'),
-                 ({'hd': None}, 'invalid_domain'), ({'hd': 'other.edu.ua'}, 'invalid_domain'),
+                 ({'email': 'voter@ukma.edu.ua.example.com'}, 'invalid_domain'),
+                 ({'email': 'voter@sub.ukma.edu.ua'}, 'invalid_domain'),
                  ({'sub': ''}, 'invalid_profile'), ({'sub': 123}, 'invalid_profile')]
         for changes, expected in cases:
             state = await self.begin()
@@ -177,7 +180,7 @@ class GoogleOAuthTests(ApiTestCase):
                 self.assert_error(await self.callback(state), 'account_conflict')
 
     async def test_new_user_is_normalized_and_not_duplicated(self):
-        profile = {'sub': 'new-sub', 'email': ' New.Student@ukma.edu.ua ', 'hd': 'ukma.edu.ua', 'email_verified': True}
+        profile = {'sub': 'new-sub', 'email': ' New.Student@ukma.edu.ua ', 'email_verified': True}
         ids = []
         for _ in range(2):
             state = await self.begin()
