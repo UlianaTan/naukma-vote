@@ -1,3 +1,5 @@
+import { Shield, ArrowRight } from "lucide-react";
+import { VoteBrand, VoteFooter } from "../../../components/layout/VoterLayout";
 import { useSearchParams } from "react-router-dom";
 import { useAuth } from "../hooks/useAuth";
 
@@ -18,9 +20,9 @@ export function LoginPage() {
   const authError = searchParams.get("error");
 
   return (
-    <div className="min-h-screen flex flex-col items-center justify-center px-4">
-      <div className="max-w-sm w-full text-center space-y-6">
-        <h1 className="text-2xl font-semibold">NaUKMA Vote</h1>
+    <div className="vote-background flex min-h-screen flex-col"><header className="border-b border-slate-200 bg-white px-5 py-4 sm:px-8"><VoteBrand /></header><main className="flex flex-1 flex-col items-center justify-center px-4 py-12"><div className="mb-7 flex h-24 w-24 items-center justify-center rounded-3xl border border-blue-100 bg-white/70 text-primary"><Shield size={52} strokeWidth={1.3} /></div>
+      <div className="vote-panel max-w-md w-full text-center space-y-6 p-7 sm:p-10">
+        <div><p className="mb-2 text-xs font-bold tracking-widest text-blue-800">NAUKMA VOTE</p><h1 className="text-2xl font-bold">Вхід у систему голосувань</h1></div>
         <p className="text-muted-foreground">
           Вхід лише для акаунтів <span className="font-medium">@ukma.edu.ua</span>
         </p>
@@ -41,11 +43,12 @@ export function LoginPage() {
 
         <button
           onClick={login}
-          className="w-full bg-primary text-primary-foreground rounded-md py-2.5 font-medium"
+          className="vote-button w-full"
         >
-          Увійти через Google
+          Увійти через Google <ArrowRight size={17} />
         </button>
-      </div>
+        <p className="border-t border-slate-100 pt-5 text-xs leading-relaxed text-slate-500">Використовуйте Google-акаунт із підтвердженою університетською адресою @ukma.edu.ua.</p>
+      </div></main><VoteFooter />
     </div>
   );
 }

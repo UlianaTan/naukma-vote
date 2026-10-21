@@ -10,12 +10,12 @@
     --card-foreground: 0 0% 3.9%;
     --popover: 0 0% 100%;
     --popover-foreground: 0 0% 3.9%;
-    --primary: 0 0% 9%;
+    --primary: 222 65% 15%;
     --primary-foreground: 0 0% 98%;
     --secondary: 0 0% 96.1%;
     --secondary-foreground: 0 0% 9%;
     --muted: 0 0% 96.1%;
-    --muted-foreground: 0 0% 45.1%;
+    --muted-foreground: 215 18% 46%;
     --accent: 0 0% 96.1%;
     --accent-foreground: 0 0% 9%;
     --destructive: 0 84.2% 60.2%;
@@ -56,4 +56,15 @@
   body {
     @apply bg-background text-foreground;
   }
+}
+@layer components {
+  .vote-background { background-color: #f7f9fc; background-image: radial-gradient(ellipse at 50% 25%, #eaf1ff99, transparent 65%), linear-gradient(#e2e8f033 1px, transparent 1px), linear-gradient(90deg, #e2e8f033 1px, transparent 1px); background-size: auto, 80px 80px, 80px 80px; }
+  .vote-panel { @apply rounded-2xl border border-slate-200 bg-white shadow-sm; }
+  .vote-button { @apply inline-flex items-center justify-center gap-2 rounded-lg bg-primary px-5 py-3 text-sm font-semibold text-primary-foreground transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50; }
+  .vote-button-secondary { @apply inline-flex items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-2.5 text-sm font-medium text-slate-600 hover:bg-slate-50 disabled:opacity-50; }
+  .vote-back { @apply inline-flex items-center gap-2 text-sm font-medium text-slate-500 hover:text-primary; }
+}
+@layer base {
+  body { @apply text-slate-900 antialiased; }
+  button, a, input, textarea, select { @apply focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600 focus-visible:ring-offset-2; }
 }

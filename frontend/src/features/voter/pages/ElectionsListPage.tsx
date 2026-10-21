@@ -1,67 +1,19 @@
+import { useState } from "react";
 import { Link } from "react-router-dom";
-import { useAuth } from "../hooks/useAuth";
-import { VoterError } from "../components/VoterFeedback";
+import { Clock, CheckCircle2, FolderOpen, RefreshCw, ArrowRight } from "lucide-react";
+import { VoterError, VoterLoading } from "../components/VoterFeedback";
 import { electionState, electionStateLabel, formatElectionDate } from "../electionState";
 import { useElections } from "../hooks/useElections";
 
 export function ElectionsListPage() {
-  const { user, logout, error: authError } = useAuth();
   const { elections, isLoading, error, reload } = useElections();
-
-  return (
-    <div className="max-w-2xl mx-auto px-4 py-8">
-      <header className="flex justify-between items-center mb-8">
-        <h1 className="text-xl font-semibold">Мої доступні голосування</h1>
-        <div className="flex items-center gap-3 text-sm">
-          <span className="text-muted-foreground">{user?.email}</span>
-          <button onClick={logout} className="underline">
-            Вийти
-          </button>
-        </div>
-      </header>
-
-      {authError && <p role="alert" className="mb-4 text-destructive">{authError}</p>}
-
-      <Link to="/admin" className="inline-block mb-6 underline">Мої голосування — створити та керувати</Link>
-
-      {isLoading && (
-        <div className="space-y-3">
-          {[1, 2].map((i) => (
-            <div key={i} className="h-20 bg-muted rounded-md animate-pulse" />
-          ))}
-        </div>
-      )}
-
-      {!isLoading && error && <VoterError message={error} retry={reload} />}
-
-      <button onClick={reload} disabled={isLoading} className="block mb-4 underline disabled:opacity-50">Оновити список</button>
-
-      {!isLoading && !error && elections.length === 0 && (
-        <div className="text-center text-muted-foreground py-12">
-          Наразі немає доступних голосувань
-        </div>
-      )}
-
-      {!isLoading && !error && elections.length > 0 && (
-        <ul className="space-y-3">
-          {elections.map(election => {
-            const state = electionState(election);
-            return <li key={election.id} className="border rounded-md p-4 space-y-2">
-              <h2 className="font-medium">{election.title}</h2>
-              {election.description && <p className="text-sm text-muted-foreground">{election.description}</p>}
-              <p className="text-sm">{electionStateLabel[state]}{election.has_voted ? ' · Ви вже проголосували' : ''}</p>
-              <p className="text-sm text-muted-foreground">{formatElectionDate(election.starts_at)} — {formatElectionDate(election.ends_at)}</p>
-              <div className="flex flex-wrap gap-4 text-sm underline">
-                <Link to={election.has_voted ? `/vote/${election.id}/done` : `/vote/${election.id}`}>
-                  {election.has_voted ? 'Підтвердження участі' : state === 'active' ? 'Голосувати' : 'Переглянути голосування'}
-                </Link>
-                {election.status === 'closed' && election.results_published && <Link to={`/vote/${election.id}/results`}>Переглянути результати</Link>}
-              </div>
-              {state === 'closed' && !election.results_published && <p className="text-sm text-muted-foreground">Результати ще не опубліковані автором.</p>}
-            </li>;
-          })}
-        </ul>
-      )}
-    </div>
-  );
+  const [filter, setFilter] = useState('all');
+  const visible = elections.filter(e => filter === 'all' || (filter === 'closed' ? electionState(e) === 'closed' : electionState(e) === 'active'));
+  return <section>
+    <div className="mb-7 flex flex-wrap items-start justify-between gap-4"><div><h1 className="text-2xl font-bold sm:text-3xl">Доступні голосування</h1><p className="mt-2 text-sm text-slate-500">Беріть участь у житті університетської спільноти.</p></div><button onClick={reload} disabled={isLoading} className="vote-button-secondary"><RefreshCw size={16} className={isLoading ? 'animate-spin' : ''} />Оновити список</button></div>
+    <div className="mb-7 flex flex-wrap items-center justify-between gap-4"><div role="group" aria-label="Фільтр голосувань" className="flex flex-wrap gap-2">{[['all','Усі голосування'],['active','Активні'],['closed','Завершені']].map(([key,label])=><button key={key} aria-pressed={filter===key} onClick={()=>setFilter(key)} className={filter===key ? 'vote-button !py-2' : 'vote-button-secondary !py-2'}>{label}</button>)}</div><span className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs text-slate-500">Усього доступно: <b className="text-slate-800">{elections.length}</b></span></div>
+    {isLoading && <VoterLoading />}{!isLoading && error && <VoterError message={error} retry={reload} />}
+    {!isLoading && !error && visible.length===0 && <div className="vote-panel px-5 py-20 text-center"><FolderOpen size={42} className="mx-auto mb-5 text-slate-300" /><h2 className="text-xl font-semibold">Наразі немає {filter==='all' ? 'доступних' : filter==='active' ? 'активних' : 'завершених'} голосувань</h2><p className="mt-3 text-sm text-slate-500">Коли голосування стане доступним для вас, воно з’явиться тут.</p></div>}
+    {!isLoading && !error && <ul className="grid gap-5 md:grid-cols-2">{visible.map(e=>{const state=electionState(e);return <li key={e.id} className="vote-panel flex flex-col p-5 sm:p-6"><div className="mb-5 flex flex-wrap items-center justify-between gap-2"><span className="text-xs font-semibold uppercase tracking-wide text-slate-500">Голосування НаУКМА</span><span className={`rounded-md px-2.5 py-1 text-xs font-medium ${state==='active' ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-500'}`}>{electionStateLabel[state]}</span></div><h2 className="break-words text-lg font-bold">{e.title}</h2>{e.description && <p className="mt-3 whitespace-pre-line break-words text-sm leading-relaxed text-slate-500">{e.description}</p>}<div className="mt-6 flex flex-1 flex-col justify-end"><div className="flex flex-wrap items-center justify-between gap-4 border-t border-slate-100 pt-4"><p className="flex items-center gap-2 text-xs text-slate-500">{e.has_voted ? <><CheckCircle2 size={16} className="text-emerald-600" />Ви вже проголосували</> : <><Clock size={16} />До {formatElectionDate(e.ends_at)}</>}</p><Link className="vote-button !px-3 !py-2 text-xs" to={state==='closed' && e.results_published ? `/vote/${e.id}/results` : e.has_voted ? `/vote/${e.id}/done` : `/vote/${e.id}`}>{state==='closed' && e.results_published ? 'Результати' : e.has_voted ? 'Підтвердження участі' : 'Перейти до голосування'}<ArrowRight size={14} /></Link></div>{state==='closed' && !e.results_published && <p className="mt-3 text-xs text-slate-500">Результати ще не опубліковані автором.</p>}</div></li>})}</ul>}
+  </section>;
 }
