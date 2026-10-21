@@ -118,9 +118,6 @@ async def google_login(next: str | None = Query(None)):
         "prompt": "select_account",
         "state": state,
     }
-    if settings.allowed_email_domain:
-        # A UI hint only; validate the returned Workspace membership below.
-        params["hd"] = settings.allowed_email_domain
     url = httpx.URL("https://accounts.google.com/o/oauth2/v2/auth").copy_merge_params(params)
     response = RedirectResponse(str(url), status_code=303)
     for name, value in (("oauth_state", state), ("oauth_next", redirect_target)):

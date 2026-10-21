@@ -57,7 +57,7 @@ python -m uvicorn app.main:app --app-dir backend --host 0.0.0.0 --port 8000
 - `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` — непорожні значення.
 - `GOOGLE_REDIRECT_URI` — точний HTTPS URL з `/api/auth/google/callback`.
   Для staging: `https://naukma-vote-backend-staging.onrender.com/api/auth/google/callback`.
-- `ALLOWED_EMAIL_DOMAIN=ukma.edu.ua` — університетський Google Workspace і whitelist.
+- `ALLOWED_EMAIL_DOMAIN=ukma.edu.ua` — точний домен підтвердженої Google-адреси; Workspace не обов’язковий.
 - `ELECTION_CLOSER_ENABLED=true`; інтервал і строки сесії — додатні числа.
 - `SESSION_COOKIE_SAMESITE` — `none` для різних site або `lax`/`strict`, якщо це
   відповідає розміщенню та перевірено в браузері. Поза local cookies завжди Secure.

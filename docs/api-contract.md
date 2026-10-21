@@ -113,7 +113,9 @@ total_votes, eligible_voters, participants, turnout_percent`. Назви, що
 - GET `/api/auth/google/login?next=<frontend URL>` → 303 до Google. `next`
   перевіряється за FRONTEND_ORIGIN. Вхід використовує `openid email`.
 - GET `/api/auth/google/callback` перевіряє state cookie, обмінює одноразовий
-  code, перевіряє email_verified, sub, email і Workspace hd. Перший вхід створює
+  code, перевіряє email_verified, sub і точний домен email. Google Workspace
+  не обов’язковий: особисті Google-акаунти з підтвердженою університетською
+  адресою також допускаються. Перший вхід створює
   користувача; повторний використовує Google sub. Старий запис із тим самим
   нормалізованим email прив’язується лише без конфліктів і за умови, що Google
   авторитетний для цього домену (Workspace hd збігається або Gmail).

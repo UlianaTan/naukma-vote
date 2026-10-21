@@ -26,11 +26,8 @@ def validate_profile(profile: object, allowed_domain: str) -> tuple[str, str]:
         raise OAuthFailure("invalid_profile") from None
     if len(email) > 255:
         raise OAuthFailure("invalid_profile")
-    if allowed_domain:
-        hosted_domain = profile.get("hd")
-        if (email.rsplit("@", 1)[1] != allowed_domain
-                or not isinstance(hosted_domain, str) or hosted_domain.lower() != allowed_domain):
-            raise OAuthFailure("invalid_domain")
+    if allowed_domain and email.rsplit("@", 1)[1] != allowed_domain:
+        raise OAuthFailure("invalid_domain")
     return subject, email
 
 
