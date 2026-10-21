@@ -3,7 +3,7 @@ import { useState, useEffect, useRef } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { Download, Users } from 'lucide-react';
 import { adminApi } from '../../services/adminApi';
-import { adminError } from '../../services/adminForm';
+import { adminError, reconcilePublication } from '../../services/adminForm';
 import { ConfirmModal } from '../../components/ui/ConfirmModal';
 
 export function ElectionResultsPage() {
@@ -15,9 +15,14 @@ export function ElectionResultsPage() {
   const [isPublishModalOpen, setIsPublishModalOpen] = useState(false);
   const [isPublished, setIsPublished] = useState(false);
   const [error, setError] = useState('');
+  const [actionError, setActionError] = useState('');
+  const [exportError, setExportError] = useState('');
+  const [publicationUncertain, setPublicationUncertain] = useState(false);
   const [reload, setReload] = useState(0);
   const [busy, setBusy] = useState(false);
   const lock = useRef(false);
+  const pendingPublication = useRef<boolean | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
 
   // Завантажуємо результати з бекенду
   useEffect(() => {
@@ -27,6 +32,11 @@ export function ElectionResultsPage() {
         .then((data) => {
           if (cancelled) return;
           setError('');
+          setPublicationUncertain(false);
+          if (pendingPublication.current !== null) {
+            if (data.results_published === pendingPublication.current) setActionError('');
+            pendingPublication.current = null;
+          }
           setResultsData(data);
           setIsPublished(data.results_published || false);
         })
@@ -34,7 +44,7 @@ export function ElectionResultsPage() {
           if (!cancelled) setError(adminError(err));
         })
         .finally(() => {
-          if (!cancelled) setIsLoading(false);
+          if (!cancelled) { setIsLoading(false); setRefreshing(false); }
         });
     }
     return () => { cancelled = true; };
@@ -43,6 +53,7 @@ export function ElectionResultsPage() {
   // Експорт у CSV через пряме завантаження з бекенду або генерацію
   const handleExportCSV = async () => {
     if (id) {
+      setExportError('');
       try {
         const blob = await adminApi.exportResults(id);
         const url = URL.createObjectURL(blob);
@@ -52,22 +63,26 @@ export function ElectionResultsPage() {
         link.click();
         setTimeout(() => URL.revokeObjectURL(url), 1000);
       } catch (err) {
-        setError(adminError(err));
+        setExportError(adminError(err));
       }
     }
   };
 
   const handlePublishConfirm = async () => {
-    if (!id || lock.current) return;
-    lock.current = true; setBusy(true); setError('');
+    if (!id || lock.current || publicationUncertain || refreshing) return;
+    lock.current = true; setBusy(true); setActionError('');
+    pendingPublication.current = !isPublished;
     try {
-      if (isPublished) await adminApi.unpublishResults(id);
-      else await adminApi.publishResults(id);
-    } catch (error) { setError(adminError(error)); }
-    finally {
-      // Re-read actual publication state even when a response was lost.
-      setReload(value => value + 1); lock.current = false; setBusy(false);
-    }
+      const result = await reconcilePublication(adminApi, id, !isPublished);
+      setActionError(result.actionError);
+      setError(result.loadError);
+      setPublicationUncertain(!result.results);
+      if (result.results) {
+        pendingPublication.current = null;
+        setResultsData(result.results);
+        setIsPublished(result.results.results_published);
+      }
+    } finally { lock.current = false; setBusy(false); }
   };
 
   if (isLoading) {
@@ -90,7 +105,9 @@ export function ElectionResultsPage() {
   return (
     <div className="flex flex-col w-full">
       {error && <p role="alert" className="mb-4 text-red-700">{error}</p>}
-      <button className="mb-4 underline" disabled={busy} onClick={() => setReload(value => value + 1)}>Оновити результати</button>
+      {actionError && <p role="alert" className="mb-4 text-red-700">{actionError}</p>}
+      {exportError && <p role="alert" className="mb-4 text-red-700">{exportError}</p>}
+      <button className="mb-4 underline" disabled={busy || refreshing} onClick={() => { setRefreshing(true); setReload(value => value + 1); }}>Оновити результати</button>
       <button className="mb-4 underline" onClick={() => navigate(`/admin/audit/${id}`)}>Переглянути аудит</button>
       <div className="mb-6">
         <button 
@@ -112,7 +129,7 @@ export function ElectionResultsPage() {
       <div className="flex items-center gap-3 mb-8">
         <button
           onClick={() => setIsPublishModalOpen(true)}
-          disabled={busy}
+          disabled={busy || publicationUncertain || refreshing}
           className={`px-5 py-2.5 rounded-lg text-sm font-semibold transition-colors ${
             isPublished 
               ? 'bg-emerald-600 text-white cursor-default'

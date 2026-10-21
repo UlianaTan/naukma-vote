@@ -73,6 +73,7 @@ GET списку повертає тільки власні голосуванн
 | PATCH `/{id}` | Редагувати чернетку | 400 якщо не чернетка; 422 дати |
 | DELETE `/{id}` | Видалити чернетку | 204; 400 якщо не чернетка |
 | POST `/{id}/candidates`, DELETE `/{id}/candidates/{cid}` | Кандидати (лише чернетка) | 409 дубль імені (без урахування регістру) |
+| PATCH `/{id}/candidates/{cid}` | Змінити name/description за ID, зберігаючи пропущені поля; лише автор і чернетка | 200; 400 після активації; 403 чужий автор; 404 чужий/відсутній кандидат; 409 дубль імені; 422 некоректні поля |
 | GET `/{id}/voters` | Список допущених email (`limit`, `offset`) | |
 | POST `/{id}/voters` | Додати email: `{"emails": [...]}` | Лише чернетка; відповідь `{added, already_present, duplicates_in_request, invalid:[{value,reason}]}` |
 | DELETE `/{id}/voters/{voter_id}` | Прибрати виборця | 204; лише чернетка |
@@ -96,7 +97,7 @@ total_votes, eligible_voters, participants, turnout_percent`. Назви, що
 
 ## Журнал дій (AuditLog)
 
-Дії: `election.created|updated|deleted`, `candidate.added|removed`,
+Дії: `election.created|updated|deleted`, `candidate.added|updated|removed`,
 `voters.added`, `voter.removed`, `election.activated`, `election.closed`
 (`details.trigger`: `manual` | `timer` | `lazy`), `results.published|unpublished|exported`.
 Журнал **не містить** окремих голосів, email, фактів явки конкретних людей і
@@ -164,3 +165,13 @@ Frontend використовує студентські endpoints через с
 через has_voted, а `/vote/:id/results` показує лише опубліковані агрегати, отримані
 окремим запитом результатів. Студентська сторінка підсумків не вимагає whitelist
 і не звертається до endpoint деталей для перевірки доступу.
+
+
+PATCH кандидата не змінює ID. Пропущений `description` зберігається,
+`description: null` явно очищає його; `name: null` заборонено. Повтор запиту
+з уже збереженими значеннями не створює зайвих подій `candidate.updated`.
+У details аудиту редагування — лише candidate_id та назви змінених полів.
+
+Мітка path метрик Prometheus містить шаблон маршруту, а не URL з ID.
+Для невідомих маршрутів використовується `unmatched`, для невідомих HTTP-методів —
+`OTHER`, щоб випадкові запити не створювали необмежену кількість наборів метрик.

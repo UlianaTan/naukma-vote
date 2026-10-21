@@ -147,6 +147,11 @@ export const adminApi = {
     return response.data;
   },
 
+  updateCandidate: async (electionId: string, candidateId: string, data: { name?: string; description?: string | null }) => {
+    const response = await api.patch<AdminCandidate>(`/admin/elections/${electionId}/candidates/${candidateId}`, data);
+    return response.data;
+  },
+
   removeCandidate: async (electionId: string, candidateId: string) => {
     const response = await api.delete(`/admin/elections/${electionId}/candidates/${candidateId}`);
     return response.status === 204;
