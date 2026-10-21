@@ -5,7 +5,6 @@ import { LoginPage } from './features/voter/pages/LoginPage';
 import { ElectionsListPage } from './features/voter/pages/ElectionsListPage';
 import { VotingPage } from './features/voter/pages/VotingPage';
 import { ResultPage } from './features/voter/pages/ResultPage';
-import { PublishedResultsPage } from './features/voter/pages/PublishedResultsPage';
 import AdminLayout from './components/layout/AdminLayout';
 import { AdminElectionsPage } from './pages/admin/AdminElectionsPage';
 import { CreateElectionPage } from './pages/admin/CreateElectionPage';
@@ -15,14 +14,8 @@ import { ElectionResultsPage } from './pages/admin/ElectionResultsPage';
 import { AuditLogPage } from './pages/admin/AuditLogPage';
 
 function ProtectedVoterRoute({ children }: { children: React.ReactNode }) {
-  const { user, isLoading, sessionError, retrySession } = useAuth();
+  const { user, isLoading } = useAuth();
   if (isLoading) return null;
-  if (sessionError) return (
-    <div className="max-w-md mx-auto p-6 space-y-4">
-      <p role="alert">{sessionError}</p>
-      <button onClick={retrySession} className="underline">Повторити перевірку сесії</button>
-    </div>
-  );
   if (!user) return <Navigate to="/login" replace />;
   return <>{children}</>;
 }
@@ -71,8 +64,6 @@ function App() {
               </ProtectedVoterRoute>
             }
           />
-
-          <Route path="/vote/:id/results" element={<ProtectedVoterRoute><PublishedResultsPage /></ProtectedVoterRoute>} />
 
           {/* Єдина секція для всіх адміністративних маршрутів під AdminLayout */}
           <Route path="/admin" element={<ProtectedVoterRoute><AdminLayout /></ProtectedVoterRoute>}>

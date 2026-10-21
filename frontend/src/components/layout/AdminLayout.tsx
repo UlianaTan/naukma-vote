@@ -50,7 +50,10 @@ export default function AdminLayout() {
 
       {/* Основна робоча область */}
       <main className="flex-1 w-full max-w-5xl mx-auto py-6 sm:py-10 px-4 relative z-10">
-        <nav className="mb-6 flex gap-4 text-sm underline"><Link to="/admin">Мої голосування</Link><Link to="/">Взяти участь у голосуванні</Link></nav>
+        <nav className="mb-6 flex flex-wrap gap-4 text-sm underline">
+          <Link to="/admin">Мої голосування</Link>
+          <Link to="/">Взяти участь у голосуванні</Link>
+        </nav>
         {error && <p role="alert">{error}</p>}
         <Outlet />
       </main>

@@ -2,7 +2,8 @@
 
 Міграції Alembic (`backend/alembic/versions`), ланцюжок:
 `15533011651c` (початкові таблиці) → `6c0a7e2d9b41` (аудит, закриття, публікація) →
-`7d3b9f1a5c82` (обмеження цілісності для production).
+`7d3b9f1a5c82` (обмеження цілісності) → `8e4c2a7b9d10` (refresh tokens) →
+`9f5d3b8c1a20` (нормалізація email) → `a3b2c1d4e5f6` (password auth).
 
 ```mermaid
 erDiagram
@@ -20,7 +21,7 @@ erDiagram
 
 | Таблиця | Призначення | Ключові обмеження |
 |---|---|---|
-| `users` | Користувачі Google OAuth | `email` UNIQUE і UNIQUE за lower(trim(email)); nullable UNIQUE `google_sub`; `role` voter/admin |
+| `users` | Користувачі first-party auth | `email` UNIQUE і UNIQUE за lower(trim(email)); nullable `password_hash` (Argon2id); `role` voter/admin |
 | `elections` | Голосування | `status` draft/active/closed; **CHECK `ends_at > starts_at`**; `closed_at`, `results_published`, `results_published_at`; індекс `(status, ends_at)` для таймера |
 | `candidates` | Кандидати | FK `election_id`; **UNIQUE `(election_id, lower(name))`** |
 | `eligible_voters` | Whitelist email | UNIQUE `(election_id, email)`; **CHECK `email = lower(email)`**; індекс по `email` |

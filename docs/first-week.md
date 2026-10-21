@@ -9,7 +9,7 @@
 | Створити frontend-каркас | Frontend Voter + Admin | Спільний SPA, lockfile, dev/lint/typecheck/build, інструкція |
 | Створити backend-каркас | Backend Core + Auth | FastAPI, /health, тест, залежності, інструкція |
 | Розширити CI для застосунків | DevOps + автори каркасів | У тих самих PR додано реальні lint/build/test; помилки блокують merge |
-| Погодити авторизацію | Backend Auth | Опис сесії, перевірок і OAuth proof of concept |
+| Погодити авторизацію | Backend Auth | Опис JWT-сесії, перевірок і provisioning користувачів |
 | Погодити модель голосу | Backend Core + Auth + QA | Опис допуску, унікальності, анонімності та доступу до даних |
 | Погодити API v0 | Обидва backend + обидва frontend, координує DevOps | Схеми запитів/відповідей та mock-приклади |
 | Перші user flows | UI/UX | Сценарії студента й організатора для review |

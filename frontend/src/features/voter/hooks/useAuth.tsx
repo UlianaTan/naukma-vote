@@ -1,16 +1,15 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
-import { api } from "../../../lib/api";
-import { API_BASE_URL, SESSION_EXPIRED_EVENT, sessionEpoch } from "../../../lib/session";
-import { loadSession } from "../../../lib/loadSession";
+import { api, ApiError } from "../../../lib/api";
+import { SESSION_EXPIRED_EVENT } from "../../../lib/session";
 import type { User } from "../types";
 
 interface AuthContextValue {
   user: User | null;
   isLoading: boolean;
   error: string | null;
-  sessionError: string | null;
-  retrySession: () => void;
-  login: () => void;
+  login: (email: string, password: string) => Promise<void>;
+  register: (email: string, password: string) => Promise<void>;
+  clearError: () => void;
   logout: () => Promise<void>;
 }
 
@@ -21,59 +20,58 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const [sessionError, setSessionError] = useState<string | null>(null);
-  const [attempt, setAttempt] = useState(0);
+  useEffect(() => {
+    const expired = () => setUser(null);
+    window.addEventListener(SESSION_EXPIRED_EVENT, expired);
+    api
+      .get<User>("/api/auth/me")
+      .then(setUser)
+      .catch(() => setUser(null))
+      .finally(() => setIsLoading(false));
+    return () => window.removeEventListener(SESSION_EXPIRED_EVENT, expired);
+  }, []);
 
-  function retrySession() {
-    setSessionError(null);
-    setIsLoading(true);
-    setAttempt(value => value + 1);
+  async function login(email: string, password: string) {
+    setError(null);
+    try {
+      const result = await api.post<{ user: User }>("/api/auth/login", { email, password });
+      setUser(result.user);
+    } catch (e) {
+      setError(e instanceof ApiError && e.status === 401
+        ? "Неправильна адреса електронної пошти або пароль."
+        : "Не вдалося виконати вхід. Спробуйте пізніше.");
+      throw e;
+    }
   }
 
-  useEffect(() => {
-    let active = true;
-    const epoch = sessionEpoch();
-    const expired = () => {
-      setUser(null);
-      setSessionError(null);
-      setIsLoading(false);
-    };
-    window.addEventListener(SESSION_EXPIRED_EVENT, expired);
-    loadSession<User>()
-      .then(result => {
-        if (!active || epoch !== sessionEpoch()) return;
-        if (result.kind === "authenticated") setUser(result.user);
-        else if (result.kind === "anonymous") setUser(null);
-        else setSessionError("Не вдалося перевірити сесію. Перевірте з’єднання та повторіть спробу.");
-      })
-      .finally(() => {
-        if (active && epoch === sessionEpoch()) setIsLoading(false);
-      });
-    return () => {
-      active = false;
-      window.removeEventListener(SESSION_EXPIRED_EVENT, expired);
-    };
-  }, [attempt]);
-
-  function login() {
-    const next = encodeURIComponent(`${window.location.origin}/`);
-    window.location.href = `${API_BASE_URL}/api/auth/google/login?next=${next}`;
+  async function register(email: string, password: string) {
+    setError(null);
+    try {
+      const result = await api.post<{ user: User }>("/api/auth/register", { email, password });
+      setUser(result.user);
+    } catch (e) {
+      setError(e instanceof ApiError && e.status === 409
+        ? "Обліковий запис із цією адресою вже існує. Увійдіть у нього."
+        : e instanceof ApiError && e.status === 400
+          ? "Реєстрація доступна лише для адрес @ukma.edu.ua."
+          : e instanceof ApiError && e.status === 422
+            ? "Перевірте адресу та пароль (не менше 12 символів)."
+            : "Не вдалося зареєструватися. Спробуйте пізніше.");
+      throw e;
+    }
   }
 
   async function logout() {
-    setError(null);
     try {
       await api.post("/api/auth/logout");
       setUser(null);
-      setSessionError(null);
-      setIsLoading(false);
-    } catch {
-      setError("Не вдалося вийти. Перевірте з’єднання та спробуйте ще раз.");
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : "Не вдалося вийти");
     }
   }
 
   return (
-    <AuthContext.Provider value={{ user, isLoading, error, sessionError, retrySession, login, logout }}>
+    <AuthContext.Provider value={{ user, isLoading, error, login, register, clearError: () => setError(null), logout }}>
       {children}
     </AuthContext.Provider>
   );

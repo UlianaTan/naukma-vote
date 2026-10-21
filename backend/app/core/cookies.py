@@ -1,4 +1,4 @@
-"""Host-only session cookies; OAuth state keeps Lax for the Google redirect."""
+"""Host-only session cookies with shared security settings."""
 import secrets
 
 from fastapi import Response

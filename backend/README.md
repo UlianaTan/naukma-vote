@@ -9,15 +9,19 @@ python3.13 -m venv .venv
 .venv/bin/pip install -r backend/requirements-dev.txt
 cp backend/.env.example backend/.env
 # Налаштувати DATABASE_URL для окремої локальної PostgreSQL.
-.venv/bin/python -m alembic current
-.venv/bin/python -m alembic upgrade head
-.venv/bin/python -m alembic check
+.venv/bin/alembic upgrade head
 .venv/bin/python -m uvicorn app.main:app --app-dir backend --reload
 ```
 
-Звичайний запуск не створює таблиці в жодному середовищі: навіть локально спочатку
-застосуйте Alembic до окремої PostgreSQL 18. Інструкція першого запуску й оновлення
-наявної БД — у [docs/deployment.md](../docs/deployment.md).
+Локальний frontend, backend та PostgreSQL можна запустити разом через
+`docker compose up --build` з кореня репозиторію (за замовчуванням API на
+`localhost:8010`, frontend на `localhost:5174`). Docker-конфігурація
+призначена для розробки; приклади облікових даних і секретів не для production.
+За замовчуванням у Compose створюються локальні `admin@ukma.edu.ua` /
+`local-admin-password-please-change` та `test@ukma.edu.ua` /
+`local-test-password-please-change`. Це публічні dev-only дані, лише для local
+Docker; замініть їх через `LOCAL_ADMIN_EMAIL`, `LOCAL_ADMIN_PASSWORD`,
+`LOCAL_TEST_EMAIL`, `LOCAL_TEST_PASSWORD` перед запуском.
 
 Runtime-залежності: requirements.txt. Dev-залежності та Ruff: requirements-dev.txt.
 
@@ -64,11 +68,14 @@ cd backend && ../.venv/bin/python -m app.cli.validate_data [election_id]
 Автор також має бути у whitelist, щоб голосувати. Аудит видаленої чернетки
 доступний її автору за записом створення в журналі.
 `X-User-Id` більше не визначає особу, тестовий адміністратор автоматично не створюється.
-Google OAuth callback видає сесію; окремий `/api/auth/login` залишається mock-входом
-лише при `ALLOW_MOCK_AUTH=true` (за замовчуванням дозволений тільки локально).
-На staging і production `ALLOW_MOCK_AUTH=true` заборонено під час запуску.
-Cookies/CSRF і спільний refresh підключено; реальний Google OAuth та політики
-cookies у браузерах staging ще потрібно перевірити.
+`POST /api/auth/register` створює voter-акаунт для адреси `@ukma.edu.ua` і одразу
+видає сесію; пароль зберігається лише як Argon2id hash. `POST /api/auth/login`
+перевіряє email/пароль і видає сесію. Користувача також може створити оператор із
+доступом до backend/DB за допомогою
+`python -m app.cli.provision_user EMAIL [--role voter|admin]`; пароль двічі вводиться
+у прихованому prompt, мінімум 12 символів, зберігається Argon2id hash. Існуючий
+користувач може бути активований цією командою без зміни його ролі.
+Cookies/CSRF і спільний refresh використовуються після password login.
 
 Розділення таблиць явки й бюлетенів не доводить повну анонімність на всіх
 рівнях системи.
@@ -93,18 +100,14 @@ TEST_DATABASE_URL вмикає перевірки паралельності, я
 It requires a valid refresh cookie (also works after access expiry), reuses an existing
 CSRF cookie and rejects an explicitly disallowed Origin. Access/refresh secrets are
 never returned in JSON. The CSRF cookie is HttpOnly as well: frontend uses this endpoint.
-Send `X-CSRF-Token` on POST/PATCH/PUT/DELETE, including refresh.
-Logout also accepts an exact trusted FRONTEND_ORIGIN when CSRF bootstrap is
-unavailable after refresh expiry. Without Origin it requires matching CSRF;
-untrusted/null Origin is always rejected, even with valid CSRF.
+Send `X-CSRF-Token` on POST/PATCH/PUT/DELETE, including refresh and logout.
 The backend still verifies ownership independently of CSRF.
 
 Cookies are host-only, Path=/, HttpOnly. Local uses SameSite=Lax without Secure;
 staging/production use SameSite=None and Secure by default. Override with
 `SESSION_COOKIE_SAMESITE=lax` for a same-site deployment. None is rejected on local HTTP.
 Access Max-Age matches ACCESS_EXPIRES_SECONDS; refresh/CSRF use REFRESH_EXPIRES_SECONDS.
-OAuth state/next use Lax and expire after 10 minutes. Logout revokes refresh and
-removes all session cookies with matching attributes. Issued access JWTs remain valid
+Logout revokes refresh and removes all session cookies with matching attributes. Issued access JWTs remain valid
 until their expiry if copied outside the browser; immediate JWT revocation is not implemented.
 Staging/production CORS allows only explicitly configured FRONTEND_ORIGIN values.
 
@@ -118,52 +121,27 @@ browsers. If blocked, use frontend/API under the same site or a same-origin API 
 SameSite=None alone does not override browser privacy settings.
 
 
-## Google OAuth
+## First-party password authentication
 
-`GET /api/auth/google/login?next=<frontend URL>` перевіряє Client ID, Client Secret,
-callback URL, SESSION_SECRET, строки сесії та cookie-політику до переходу в Google.
-`next` дозволений лише для FRONTEND_ORIGIN; frontend передає власну адресу.
-Потрібні `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REDIRECT_URI`.
-Callback має шлях `/api/auth/google/callback`; поза local потрібен HTTPS.
-Запитуються лише `openid email`; Google refresh token не потрібний — застосунок
-видає власну refresh-сесію. Під час входу можна обрати акаунт.
+`POST /api/auth/register` creates a voter account only for an `@ukma.edu.ua`
+address, requires a password of at least 12 characters, stores only an Argon2id
+hash, and issues the standard session cookies immediately. No administrator
+confirmation or email verification step is required. `POST /api/auth/login`
+authenticates existing accounts; unknown accounts and invalid passwords receive
+the same 401 response.
 
-Callback спершу перевіряє state, потім обмінює code через Google HTTPS endpoints.
-Перевіряються `email_verified=true`, валідний email, непорожній `sub` та, якщо
-задано ALLOWED_EMAIL_DOMAIN, одночасно домен email і Workspace `hd`.
-Для університетського входу залишайте `ALLOWED_EMAIL_DOMAIN=ukma.edu.ua`.
-Налаштування порожнього домену дозволяє інші Google-акаунти й потребує окремої
-оцінки політики доступу; це не рекомендований режим NaUKMA Vote.
+Run `python -m app.cli.provision_user EMAIL [--role voter|admin]` from `backend`
+with the configured database. The command enforces `ALLOWED_EMAIL_DOMAIN` when set,
+prompts twice without echoing the password, and requires at least 12 characters.
+It creates a voter by default or sets a password on an existing account; an
+existing role is preserved unless `--role` is supplied. Apply per-IP rate limiting
+to `/api/auth/login` and `/api/auth/register` at the public
+ingress; no in-process limiter is configured by this application.
 
-Перед використанням нового коду застосуйте Alembic до окремої локальної/тестової БД:
-`alembic upgrade head`. Міграція `9f5d3b8c1a20` додає nullable UNIQUE `google_sub`
-і унікальний індекс нормалізованого email. Вона зупиняється перед змінами, якщо є
-кілька старих користувачів з однаковим нормалізованим email. Їх не можна автоматично
-видаляти чи об’єднувати: вони можуть мати власні голосування й історію участі.
-Після перевірки профілю старий єдиний запис без google_sub прив’язується до Google
-із збереженням ID, ролі та авторства. Інший Google sub не може переприв’язати запис.
-Зміна email того самого sub зберігає ID; конфлікт з іншим користувачем відхиляється.
+Use the configured `LOCAL_TEST_EMAIL` and `LOCAL_TEST_PASSWORD` with the regular
+email/password form, or create an account from the registration form.
 
-Успіх — 303 до дозволеного frontend, сесійні cookies. Помилки — 303 на
-`/login?error=<code>`: access_denied, invalid_state, invalid_domain,
-unverified_email, invalid_profile, google_unavailable, oauth_failed,
-auth_unavailable або account_conflict. Якщо жоден frontend origin не налаштовано,
-повертається 503. Відповіді не кешуються; OAuth cookies очищаються після callback,
-сирі відповіді Google, коди та секрети не передаються в повідомленнях помилок.
-Одна браузерна cookie зберігає одну поточну спробу: новий вхід в іншій вкладці
-може зробити попередній state невалідним; сторінка запропонує почати знову.
-
-Тести `test_google_oauth.py` підміняють Google, а не перевіряють реальний Google-вхід.
-`test_google_identity_migration.py` перевіряє нову міграцію ізольовано на SQLite;
-повний ланцюжок міграцій і паралельний вхід перевіряються на PostgreSQL у CI.
-
-
-## Deployment readiness regressions
-
-`tests/test_deployment_readiness.py` перевіряє відмову запуску без міграцій,
-відсутність автоматичних змін схеми, налаштування staging/production і приватність логів.
-`tests/test_pg_migrations.py` на окремій PostgreSQL 18 перевіряє весь ланцюжок
-міграцій, збереження наявних користувачів/авторства/голосів та відмову при
-неоднозначних старих акаунтах. Як і concurrency-тести, він вимагає
-`TEST_DATABASE_URL` із назвою БД, що закінчується на `_test` або `_ci`, і змінює
-лише власні випадкові схеми. Без PostgreSQL ці перевірки явно пропускаються.
+The password-auth migration adds nullable `password_hash` and removes the obsolete
+Google subject; a later migration removes the deprecated administrator email-verification
+fields. Apply migrations with `alembic upgrade head` after backing up the database.
+Existing election ownership, roles, email addresses, and user IDs remain unchanged.

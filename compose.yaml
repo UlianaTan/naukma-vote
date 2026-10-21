@@ -1,0 +1,85 @@
+services:
+  db:
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-naukma_vote}
+      POSTGRES_USER: ${POSTGRES_USER:-naukma_vote}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-docker-local-only}
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-5434}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    environment:
+      APP_ENV: local
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-naukma_vote}:${POSTGRES_PASSWORD:-docker-local-only}@db:5432/${POSTGRES_DB:-naukma_vote}
+      SESSION_SECRET: ${SESSION_SECRET:-local-compose-only-secret-not-for-production-123456}
+      FRONTEND_ORIGIN: http://localhost:${FRONTEND_PORT:-5174}
+      ALLOWED_EMAIL_DOMAIN: ${ALLOWED_EMAIL_DOMAIN:-ukma.edu.ua}
+      LOCAL_ADMIN_EMAIL: ${LOCAL_ADMIN_EMAIL:-admin@ukma.edu.ua}
+      LOCAL_ADMIN_PASSWORD: ${LOCAL_ADMIN_PASSWORD:-local-admin-password-please-change}
+      LOCAL_TEST_EMAIL: ${LOCAL_TEST_EMAIL:-test@ukma.edu.ua}
+      LOCAL_TEST_PASSWORD: ${LOCAL_TEST_PASSWORD:-local-test-password-please-change}
+      ELECTION_CLOSER_ENABLED: "true"
+      SESSION_COOKIE_SAMESITE: lax
+    ports:
+      - "${BACKEND_PORT:-8010}:8000"
+    volumes:
+      - ./backend:/app/backend
+      - ./alembic.ini:/app/alembic.ini:ro
+    depends_on:
+      db:
+        condition: service_healthy
+    command: >
+      sh -c "alembic upgrade head &&
+      python -m uvicorn app.main:app --app-dir backend
+      --host 0.0.0.0 --port 8000 --reload"
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/ready', timeout=3)"
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 15s
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    environment:
+      VITE_API_BASE_URL: http://localhost:${BACKEND_PORT:-8010}
+    ports:
+      - "${FRONTEND_PORT:-5174}:5173"
+    volumes:
+      - ./frontend:/app
+      - frontend_node_modules:/app/node_modules
+    depends_on:
+      backend:
+        condition: service_healthy
+    command: npm run dev -- --host 0.0.0.0
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:5173').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 15s
+
+volumes:
+  postgres_data:
+  frontend_node_modules:

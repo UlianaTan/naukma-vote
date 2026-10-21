@@ -20,7 +20,6 @@ from app.schemas.admin_elections import (
     ElectionUpdate,
     ElectionDetailResponse,
     CandidateCreate,
-    CandidateUpdate,
     CandidateResponse,
     IntegrityIssueOut,
     IntegrityReport,
@@ -250,38 +249,6 @@ async def add_candidate(
     await db.commit()
     await db.refresh(candidate)
     return candidate
-
-@router.patch("/{election_id}/candidates/{candidate_id}", response_model=CandidateResponse)
-async def update_candidate(
-    election_id: uuid.UUID,
-    candidate_id: uuid.UUID,
-    payload: CandidateUpdate,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    """Редагування кандидата за ID; пропущені поля зберігаються."""
-    await _require_owner(db, election_id, current_user)
-    await _lock_draft(db, election_id, "Кандидатів можна редагувати лише у чернетці")
-    candidate = await db.scalar(select(Candidate).where(
-        Candidate.id == candidate_id, Candidate.election_id == election_id))
-    if candidate is None:
-        raise HTTPException(status_code=404, detail="Кандидата не знайдено")
-    changes = {field: value for field, value in payload.model_dump(exclude_unset=True).items()
-               if getattr(candidate, field) != value}
-    if "name" in changes:
-        names = (await db.scalars(select(Candidate.name).where(
-            Candidate.election_id == election_id, Candidate.id != candidate_id))).all()
-        if changes["name"].casefold() in {name.casefold() for name in names}:
-            raise HTTPException(status_code=409, detail="Кандидат з таким іменем уже є в цьому голосуванні")
-    if changes:
-        for field, value in changes.items():
-            setattr(candidate, field, value)
-        record_audit(db, action=AuditAction.CANDIDATE_UPDATED, actor_id=current_user.id,
-                     election_id=election_id, details={"candidate_id": candidate_id, "fields": sorted(changes)})
-    await db.commit()
-    await db.refresh(candidate)
-    return candidate
-
 
 @router.delete("/{election_id}/candidates/{candidate_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def remove_candidate(

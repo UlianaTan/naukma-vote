@@ -1,9 +1,8 @@
 import type { AdminElectionResults } from '../../services/adminApi';
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { Download, Users } from 'lucide-react';
 import { adminApi } from '../../services/adminApi';
-import { adminError, reconcilePublication } from '../../services/adminForm';
 import { ConfirmModal } from '../../components/ui/ConfirmModal';
 
 export function ElectionResultsPage() {
@@ -14,46 +13,27 @@ export function ElectionResultsPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [isPublishModalOpen, setIsPublishModalOpen] = useState(false);
   const [isPublished, setIsPublished] = useState(false);
-  const [error, setError] = useState('');
-  const [actionError, setActionError] = useState('');
-  const [exportError, setExportError] = useState('');
-  const [publicationUncertain, setPublicationUncertain] = useState(false);
-  const [reload, setReload] = useState(0);
-  const [busy, setBusy] = useState(false);
-  const lock = useRef(false);
-  const pendingPublication = useRef<boolean | null>(null);
-  const [refreshing, setRefreshing] = useState(false);
 
   // Завантажуємо результати з бекенду
   useEffect(() => {
-    let cancelled = false;
     if (id) {
       adminApi.getAdminResults(id)
         .then((data) => {
-          if (cancelled) return;
-          setError('');
-          setPublicationUncertain(false);
-          if (pendingPublication.current !== null) {
-            if (data.results_published === pendingPublication.current) setActionError('');
-            pendingPublication.current = null;
-          }
           setResultsData(data);
           setIsPublished(data.results_published || false);
         })
         .catch((err) => {
-          if (!cancelled) setError(adminError(err));
+          console.error("Помилка завантаження результатів:", err);
         })
         .finally(() => {
-          if (!cancelled) { setIsLoading(false); setRefreshing(false); }
+          setIsLoading(false);
         });
     }
-    return () => { cancelled = true; };
-  }, [id, reload]);
+  }, [id]);
 
   // Експорт у CSV через пряме завантаження з бекенду або генерацію
   const handleExportCSV = async () => {
     if (id) {
-      setExportError('');
       try {
         const blob = await adminApi.exportResults(id);
         const url = URL.createObjectURL(blob);
@@ -63,26 +43,22 @@ export function ElectionResultsPage() {
         link.click();
         setTimeout(() => URL.revokeObjectURL(url), 1000);
       } catch (err) {
-        setExportError(adminError(err));
+        console.error("Помилка експорту CSV:", err);
+        alert("Не вдалося завантажити CSV. Спробуйте ще раз.");
       }
     }
   };
 
   const handlePublishConfirm = async () => {
-    if (!id || lock.current || publicationUncertain || refreshing) return;
-    lock.current = true; setBusy(true); setActionError('');
-    pendingPublication.current = !isPublished;
-    try {
-      const result = await reconcilePublication(adminApi, id, !isPublished);
-      setActionError(result.actionError);
-      setError(result.loadError);
-      setPublicationUncertain(!result.results);
-      if (result.results) {
-        pendingPublication.current = null;
-        setResultsData(result.results);
-        setIsPublished(result.results.results_published);
+    if (id) {
+      try {
+        await adminApi.publishResults(id);
+        setIsPublished(true);
+      } catch (err) {
+        console.error("Помилка публікації результатів:", err);
+        alert("Не вдалося опублікувати результати.");
       }
-    } finally { lock.current = false; setBusy(false); }
+    }
   };
 
   if (isLoading) {
@@ -94,7 +70,7 @@ export function ElectionResultsPage() {
   }
 
   if (!resultsData) {
-    return <div role="alert" className="p-8 text-red-700">{error || "Не вдалося завантажити результати."} <button onClick={() => setReload(value => value + 1)}>Повторити</button></div>;
+    return <div role="alert" className="p-8 text-red-700">Не вдалося завантажити дані голосування. Перевірте доступ і спробуйте оновити сторінку.</div>;
   }
 
   const totalVoters = resultsData?.eligible_count ?? 0;
@@ -104,11 +80,6 @@ export function ElectionResultsPage() {
 
   return (
     <div className="flex flex-col w-full">
-      {error && <p role="alert" className="mb-4 text-red-700">{error}</p>}
-      {actionError && <p role="alert" className="mb-4 text-red-700">{actionError}</p>}
-      {exportError && <p role="alert" className="mb-4 text-red-700">{exportError}</p>}
-      <button className="mb-4 underline" disabled={busy || refreshing} onClick={() => { setRefreshing(true); setReload(value => value + 1); }}>Оновити результати</button>
-      <button className="mb-4 underline" onClick={() => navigate(`/admin/audit/${id}`)}>Переглянути аудит</button>
       <div className="mb-6">
         <button 
           onClick={() => navigate('/admin')}
@@ -129,14 +100,14 @@ export function ElectionResultsPage() {
       <div className="flex items-center gap-3 mb-8">
         <button
           onClick={() => setIsPublishModalOpen(true)}
-          disabled={busy || publicationUncertain || refreshing}
+          disabled={isPublished}
           className={`px-5 py-2.5 rounded-lg text-sm font-semibold transition-colors ${
             isPublished 
               ? 'bg-emerald-600 text-white cursor-default'
               : 'bg-[#0B1B3D] text-white hover:bg-slate-800'
           }`}
         >
-          {busy ? 'Збереження…' : isPublished ? 'Приховати опубліковані результати' : 'Опублікувати результати студентству'}
+          {isPublished ? '✓ Результати опубліковано' : 'Опублікувати результати студентству'}
         </button>
 
         <button
@@ -211,9 +182,9 @@ export function ElectionResultsPage() {
         isOpen={isPublishModalOpen}
         onClose={() => setIsPublishModalOpen(false)}
         onConfirm={handlePublishConfirm}
-        title={isPublished ? "Приховати результати?" : "Опублікувати результати студентству?"}
-        description={isPublished ? "Студенти більше не бачитимуть результати." : "Результати будуть доступні всім користувачам, які увійшли на сайт."}
-        confirmText={isPublished ? "Приховати" : "Опублікувати"}
+        title="Опублікувати результати студентству?"
+        description="Результати голосування будуть опубліковані публічно."
+        confirmText="Опублікувати"
         cancelText="Скасувати"
         type="primary"
         icon="lock"
