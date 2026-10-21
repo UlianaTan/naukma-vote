@@ -6,6 +6,7 @@ import { ElectionsListPage } from './features/voter/pages/ElectionsListPage';
 import { VotingPage } from './features/voter/pages/VotingPage';
 import { ResultPage } from './features/voter/pages/ResultPage';
 import { PublishedResultsPage } from './features/voter/pages/PublishedResultsPage';
+import VoterLayout from './components/layout/VoterLayout';
 import AdminLayout from './components/layout/AdminLayout';
 import { AdminElectionsPage } from './pages/admin/AdminElectionsPage';
 import { CreateElectionPage } from './pages/admin/CreateElectionPage';
@@ -47,32 +48,12 @@ function App() {
           {/* Студентські маршрути */}
           <Route path="/login" element={<LoginPage />} />
 
-          <Route
-            path="/"
-            element={
-              <ProtectedVoterRoute>
-                <ElectionsListPage />
-              </ProtectedVoterRoute>
-            }
-          />
-          <Route
-            path="/vote/:id"
-            element={
-              <ProtectedVoterRoute>
-                <VotingPage />
-              </ProtectedVoterRoute>
-            }
-          />
-          <Route
-            path="/vote/:id/done"
-            element={
-              <ProtectedVoterRoute>
-                <ResultPage />
-              </ProtectedVoterRoute>
-            }
-          />
-
-          <Route path="/vote/:id/results" element={<ProtectedVoterRoute><PublishedResultsPage /></ProtectedVoterRoute>} />
+          <Route element={<ProtectedVoterRoute><VoterLayout /></ProtectedVoterRoute>}>
+            <Route path="/" element={<ElectionsListPage />} />
+            <Route path="/vote/:id" element={<VotingPage />} />
+            <Route path="/vote/:id/done" element={<ResultPage />} />
+            <Route path="/vote/:id/results" element={<PublishedResultsPage />} />
+          </Route>
 
           {/* Єдина секція для всіх адміністративних маршрутів під AdminLayout */}
           <Route path="/admin" element={<ProtectedVoterRoute><AdminLayout /></ProtectedVoterRoute>}>
