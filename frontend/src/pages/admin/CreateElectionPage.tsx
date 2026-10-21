@@ -402,7 +402,7 @@ export const CreateElectionPage = () => {
               {votersFileError && <p id="voters-file-error" role="alert" className="mt-2 text-xs font-medium text-red-600">{votersFileError} Оберіть інший файл.</p>}
               {votersError && <p id="voters-error" role="alert" className="mt-2 break-words text-xs font-medium text-red-600">{votersError}</p>}
               {votersLoadError && <p role="alert" className="mt-3 text-sm text-red-700">{votersLoadError} <button type="button" className="underline" onClick={() => setVotersReload(value => value + 1)}>Повторити перевірку виборців</button></p>}
-              {savedVoters?.electionId === savedId && savedVoters?.exists && <p role="status" className="mt-4 rounded-xl border border-blue-100 bg-blue-50 px-4 py-3 text-sm leading-6 text-blue-950">Вказаних виборців уже збережено в базі. Порожні поля не означають, що список порожній. Переглянути або змінити список можна через «Перевірити список виборців».</p>}
+              {savedVoters?.electionId === savedId && savedVoters?.exists && <p role="status" className="mt-4 rounded-xl border border-blue-100 bg-blue-50 px-4 py-3 text-sm leading-6 text-blue-950">Виборців уже збережено. Щоб додати нових, завантажте файл або введіть email-адреси в поле вище. Переглянути збережений список або видалити виборців можна через «Перевірити список виборців».</p>}
             </div>
             
             <div className="flex items-center justify-between pt-6 mt-8 border-t border-slate-100">
