@@ -27,8 +27,8 @@ async def close_expired_once(session_factory: Callable[[], AsyncSession]) -> int
             try:
                 _, changed = await close_election(db, election_id, None, TRIGGER_TIMER)
                 closed += int(changed)
-            except Exception:  # noqa: BLE001 — цикл має жити далі
-                logger.exception("Не вдалося закрити голосування %s", election_id)
+            except Exception as exc:  # noqa: BLE001 — цикл має жити далі
+                logger.error("Не вдалося закрити голосування %s (%s)", election_id, type(exc).__name__)
                 await db.rollback()
     return closed
 
@@ -44,8 +44,8 @@ async def run_closer_loop(
             closed = await close_expired_once(session_factory)
             if closed:
                 logger.info("Закрито за таймером: %d", closed)
-        except Exception:  # noqa: BLE001
-            logger.exception("Збій проходу таймера закриття")
+        except Exception as exc:  # noqa: BLE001
+            logger.error("Збій проходу таймера закриття (%s)", type(exc).__name__)
         try:
             await asyncio.wait_for(stop_event.wait(), timeout=interval_seconds)
         except asyncio.TimeoutError:

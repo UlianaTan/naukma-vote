@@ -16,6 +16,7 @@ DATABASE_URL = os.getenv(
 engine = create_async_engine(
     DATABASE_URL,
     echo=False,
+    hide_parameters=True,
     future=True,
     pool_pre_ping=True
 )
