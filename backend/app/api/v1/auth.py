@@ -1,12 +1,12 @@
 from fastapi import APIRouter, Depends, HTTPException, Response, Request, status, Cookie, Query
 from fastapi.responses import RedirectResponse, JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from starlette.concurrency import run_in_threadpool
 
 from app.models.enums import UserRole
-from app.schemas.auth import LoginRequest, RegistrationRequest
+from app.schemas.auth import LoginRequest, PasswordSetupRequest, RegistrationRequest
 from app.services.passwords import hash_password, verify_password
 import httpx
 import urllib.parse
@@ -33,12 +33,16 @@ def _check_auth_origin(request: Request) -> None:
         raise HTTPException(status_code=403, detail="Origin not allowed")
 
 
+def _user_info(user: User) -> dict:
+    return {"id": str(user.id), "email": user.email, "role": user.role.value,
+            "needs_password_setup": user.google_sub is not None and user.password_hash is None}
+
+
 async def _password_session(db: AsyncSession, response: Response, user: User) -> dict:
     access = create_access_token(str(user.id))
     refresh = await create_refresh_token(db, str(user.id))
     set_session_cookies(response, access, refresh)
-    return {"status": "ok", "user": {
-        "id": str(user.id), "email": user.email, "role": user.role.value}}
+    return {"status": "ok", "user": _user_info(user)}
 
 
 @router.post("/register", status_code=status.HTTP_201_CREATED)
@@ -273,7 +277,30 @@ async def logout(response: Response, refresh_token: str | None = Cookie(None), d
 @router.get("/me")
 async def me(response: Response, user: User = Depends(get_current_user)):
     response.headers["Cache-Control"] = "no-store"
-    return {"id": str(user.id), "email": user.email, "role": user.role.value}
+    return _user_info(user)
+
+
+@router.post("/password", dependencies=[Depends(get_current_user), Depends(csrf_protect)])
+async def setup_password(payload: PasswordSetupRequest, response: Response,
+                         db: AsyncSession = Depends(get_db),
+                         user: User = Depends(get_current_user)):
+    """Set the current Google user's first password, never reset an existing one."""
+    response.headers["Cache-Control"] = "no-store"
+    if user.google_sub is None:
+        raise HTTPException(status_code=403, detail="Google account required")
+    if user.password_hash is not None:
+        raise HTTPException(status_code=409, detail="Password is already set")
+    encoded = await run_in_threadpool(hash_password, payload.password)
+    # Conditional update prevents two tabs/requests from overwriting each other.
+    result = await db.execute(update(User).where(
+        User.id == user.id, User.google_sub.is_not(None), User.password_hash.is_(None)
+    ).values(password_hash=encoded).execution_options(synchronize_session=False))
+    if result.rowcount != 1:
+        await db.rollback()
+        raise HTTPException(status_code=409, detail="Password is already set")
+    await db.commit()
+    await db.refresh(user)
+    return {"status": "ok", "user": _user_info(user)}
 
 
 @router.get("/csrf")

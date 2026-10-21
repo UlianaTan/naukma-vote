@@ -46,6 +46,7 @@ class PasswordLoginTests(ApiTestCase):
             "id": str(voter_id(1001)),
             "email": voter_email(1001),
             "role": "voter",
+            "needs_password_setup": False,
         })
         self.assertIn("access_token", self.browser.cookies)
         self.assertIn("refresh_token", self.browser.cookies)

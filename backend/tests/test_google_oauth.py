@@ -266,3 +266,31 @@ class GoogleOAuthTests(ApiTestCase):
         async with self.Session() as db:
             user = await db.get(User, voter_id(1001))
             self.assertIsNone(user.google_sub)
+
+    async def test_new_google_user_sets_password_and_subsequent_google_login_does_not_prompt(self):
+        profile = {'sub': 'setup-new-google-sub', 'email': 'google.setup.qa@ukma.edu.ua', 'email_verified': True}
+        state = await self.begin()
+        with self.google(profile=profile):
+            self.assertEqual((await self.callback(state)).status_code, 303)
+        first = (await self.browser.get('/api/auth/me')).json()
+        self.assertTrue(first['needs_password_setup'])
+        csrf = (await self.browser.get('/api/auth/csrf')).json()['csrf_token']
+        response = await self.browser.post('/api/auth/password', json={'password': 'google-first-password-123'},
+                                           headers={'X-CSRF-Token': csrf})
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertFalse(response.json()['user']['needs_password_setup'])
+        self.browser.cookies.clear()
+        state = await self.begin()
+        with self.google(profile=profile):
+            self.assertEqual((await self.callback(state)).status_code, 303)
+        again = (await self.browser.get('/api/auth/me')).json()
+        self.assertEqual(first['id'], again['id'])
+        self.assertFalse(again['needs_password_setup'])
+
+    async def test_existing_google_user_without_password_also_needs_setup(self):
+        state = await self.begin()
+        with self.google():
+            await self.callback(state)
+        user = (await self.browser.get('/api/auth/me')).json()
+        self.assertEqual(user['id'], str(voter_id(1001)))
+        self.assertTrue(user['needs_password_setup'])

@@ -300,3 +300,15 @@ test('invalid password does not refresh or reuse an old logged-in session', asyn
   await assert.rejects(sessionFetch('/api/auth/register', { method: 'POST', body: '{}' }), { status: 401 });
   assert.deepEqual(calls.map(call => call.path), ['/api/auth/login', '/api/auth/register']);
 });
+
+test('first password setup requires the session CSRF token and keeps cookies', async () => {
+  clearSession();
+  const calls = mockServer((path, options, headers) => {
+    assert.equal(path, '/api/auth/password');
+    assert.equal(options.method, 'POST');
+    assert.equal(headers.get('X-CSRF-Token'), 'test-csrf');
+    return response(200, { status: 'ok' });
+  });
+  await sessionFetch('/api/auth/password', { method: 'POST', body: '{}' });
+  assert.deepEqual(calls.map(call => call.path), ['/api/auth/csrf', '/api/auth/password']);
+});

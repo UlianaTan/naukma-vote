@@ -917,6 +917,7 @@ class SessionAuthenticationTests(ApiTestCase):
                 "id": str(user_id),
                 "email": "organizer@ukma.edu.ua" if role == "admin" else voter_email(1001),
                 "role": role,
+                "needs_password_setup": False,
             })
 
     async def test_missing_invalid_and_expired_sessions_return_401(self):
