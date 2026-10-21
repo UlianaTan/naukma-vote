@@ -245,7 +245,6 @@ export const CreateElectionPage = () => {
 
             {errors.title && <p role="alert" className="text-red-700">{errors.title}</p>}
             {errors.description && <p role="alert" className="text-red-700">{errors.description}</p>}
-            {errors.startDate && <p role="alert" className="text-red-700">{errors.startDate}</p>}
             <p className="text-sm text-slate-500">Дати й час вказуйте за місцевим часом вашого пристрою.</p>
             <div>
               <label className="block text-sm font-bold text-slate-900 mb-2">Опис та правила</label>
@@ -260,25 +259,34 @@ export const CreateElectionPage = () => {
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
               <div>
-                <label className="block text-sm font-bold text-slate-900 mb-2">Дата початку</label>
+                <label htmlFor="start-date" className="block text-sm font-bold text-slate-900 mb-2">Дата початку</label>
                 <input 
+                  id="start-date"
                   type="datetime-local" 
                   value={startDate}
                   onChange={(e) => setStartDate(e.target.value)}
-                  className="w-full border border-slate-300 rounded-lg px-4 py-3 text-sm text-slate-700 focus:outline-none"
+                  aria-invalid={Boolean(errors.startDate)}
+                  aria-describedby={errors.startDate ? 'start-date-error' : undefined}
+                  className={`w-full border rounded-lg px-4 py-3 text-sm text-slate-700 focus:outline-none ${
+                    errors.startDate ? 'border-red-500' : 'border-slate-300'
+                  }`}
                 />
+                {errors.startDate && <p id="start-date-error" role="alert" className="text-xs text-red-600 mt-1.5 font-medium">{errors.startDate}</p>}
               </div>
               <div>
-                <label className="block text-sm font-bold text-slate-900 mb-2">Дата завершення</label>
+                <label htmlFor="end-date" className="block text-sm font-bold text-slate-900 mb-2">Дата завершення</label>
                 <input 
+                  id="end-date"
                   type="datetime-local" 
                   value={endDate}
                   onChange={(e) => setEndDate(e.target.value)}
+                  aria-invalid={Boolean(errors.endDate)}
+                  aria-describedby={errors.endDate ? 'end-date-error' : undefined}
                   className={`w-full border rounded-lg px-4 py-3 text-sm text-slate-700 focus:outline-none ${
                     errors.endDate ? 'border-red-500' : 'border-slate-300'
                   }`}
                 />
-                {errors.endDate && <p className="text-xs text-red-600 mt-1.5 font-medium">{errors.endDate}</p>}
+                {errors.endDate && <p id="end-date-error" role="alert" className="text-xs text-red-600 mt-1.5 font-medium">{errors.endDate}</p>}
               </div>
             </div>
 
