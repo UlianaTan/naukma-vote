@@ -1,3 +1,4 @@
+import type { DraftCandidate } from '../../services/adminForm';
 import type { AdminElection } from '../../services/adminApi';
 import type { ChangeEvent } from 'react';
 import { useState, useRef, useEffect } from 'react';
@@ -16,7 +17,7 @@ export const CreateElectionPage = () => {
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
   const [electionStatus, setElectionStatus] = useState<AdminElection['status']>('draft');
-  const [candidates, setCandidates] = useState<string[]>(['', '']);
+  const [candidates, setCandidates] = useState<DraftCandidate[]>([{ name: '' }, { name: '' }]);
   const [votersFile, setVotersFile] = useState<File | null>(null);
   const [fileEmails, setFileEmails] = useState<string[]>([]);
   const [fileBusy, setFileBusy] = useState(false);
@@ -50,7 +51,7 @@ export const CreateElectionPage = () => {
         setStartDate(localDateTime(data.starts_at));
         setEndDate(localDateTime(data.ends_at));
         setElectionStatus(data.status);
-        setCandidates(data.candidates.length ? data.candidates.map(c => c.name) : ['', '']);
+        setCandidates(data.candidates.length ? data.candidates.map(c => ({ id: c.id, name: c.name })) : [{ name: '' }, { name: '' }]);
         setLoadError('');
       }).catch(error => { if (!cancelled) setLoadError(adminError(error)); })
         .finally(() => { if (!cancelled) setLoadedElectionId(id); });
@@ -59,9 +60,9 @@ export const CreateElectionPage = () => {
   }, [id, reload]);
 
   const handleCandidateChange = (index: number, value: string) => {
-    setCandidates(previous => previous.map((name, i) => i === index ? value : name));
+    setCandidates(previous => previous.map((row, i) => i === index ? { ...row, name: value } : row));
   };
-  const handleAddCandidate = () => setCandidates(previous => [...previous, '']);
+  const handleAddCandidate = () => setCandidates(previous => [...previous, { name: '' }]);
   const handleRemoveCandidate = (index: number) => setCandidates(previous => previous.filter((_, i) => i !== index));
 
   const handleFileChange = async (event: ChangeEvent<HTMLInputElement>) => {
@@ -98,7 +99,7 @@ export const CreateElectionPage = () => {
     if (!Number.isFinite(start)) next.startDate = 'Вкажіть дату початку.';
     else if (!unchangedStart && start <= Date.now()) next.startDate = 'Оберіть час початку в майбутньому.';
     if (!Number.isFinite(end) || end <= Date.now() || end <= start) next.endDate = 'Завершення має бути в майбутньому й пізніше початку.';
-    const names = candidates.map(c => c.trim()).filter(Boolean);
+    const names = candidates.map(c => c.name.trim()).filter(Boolean);
     if (activate && names.length < 2) next.candidates = 'Для запуску додайте щонайменше двох кандидатів.';
     if (names.some(name => name.length < 2 || name.length > 255)) next.candidates = 'Ім’я кандидата — від 2 до 255 символів.';
     if (new Set(names.map(name => name.toLocaleLowerCase())).size !== names.length) next.candidates = 'Імена кандидатів не мають повторюватися.';
@@ -115,7 +116,8 @@ export const CreateElectionPage = () => {
     let stage = 'Збереження даних';
     let electionId = savedId;
     try {
-      const names = candidates.map(name => name.trim()).filter(Boolean);
+      const desired = candidates.map(row => ({ ...row, name: row.name.trim() })).filter(row => row.name);
+      const names = desired.map(row => row.name);
       if (!electionId) {
         try {
           const created = await adminApi.createElection({ title: title.trim(), description: description.trim(),
@@ -124,6 +126,7 @@ export const CreateElectionPage = () => {
           electionId = created.id;
           setSavedId(created.id);
           snapshot.current = created;
+          setCandidates(created.candidates.map(row => ({ id: row.id, name: row.name })));
           // Preserve the draft address even if later operations fail or the page is refreshed.
           setLoadedElectionId(created.id);
           navigate(`/admin/edit/${created.id}`, { replace: true });
@@ -144,7 +147,8 @@ export const CreateElectionPage = () => {
         };
         await adminApi.updateElection(electionId, { title: title.trim(), description: description.trim(), ...dates });
         stage = 'Збереження кандидатів';
-        snapshot.current = await syncCandidates(adminApi, electionId, names);
+        snapshot.current = await syncCandidates(adminApi, electionId, desired);
+        setCandidates(snapshot.current.candidates.map(row => ({ id: row.id, name: row.name })));
       }
       stage = 'Додавання виборців';
       const emails = parseVoterEmails([...fileEmails, manualEmails].join('\n'));
@@ -285,7 +289,7 @@ export const CreateElectionPage = () => {
                   <div key={index} className="flex items-center gap-3">
                     <input 
                       type="text" 
-                      value={candidate}
+                      value={candidate.name}
                       onChange={(e) => handleCandidateChange(index, e.target.value)}
                       placeholder="Ім'я та прізвище кандидата"
                       className="w-full border border-slate-300 rounded-lg px-4 py-3 text-sm text-slate-900 focus:outline-none"

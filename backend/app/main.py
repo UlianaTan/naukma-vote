@@ -119,8 +119,11 @@ async def prometheus_middleware(request: Request, call_next):
         raise
     latency = time.time() - start
     try:
-        path = request.url.path
-        method = request.method
+        # Route templates bound cardinality; IDs and arbitrary 404 paths must
+        # never allocate a separate Prometheus series. Normalize unknown verbs too.
+        route = request.scope.get("route")
+        path = getattr(route, "path", None) or "unmatched"
+        method = request.method if request.method in {"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS", "TRACE", "CONNECT"} else "OTHER"
         status = str(response.status_code)
         HTTP_REQUEST_LATENCY.labels(method=method, path=path).observe(latency)
         HTTP_REQUESTS_TOTAL.labels(method=method, path=path, status=status).inc()

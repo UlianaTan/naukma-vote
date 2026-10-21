@@ -1,5 +1,5 @@
 import axios from 'axios';
-import type { AdminElection } from './adminApi';
+import type { AdminElection, AdminElectionResults } from './adminApi';
 
 // SQLite serializes backend UTC dates without an offset; PostgreSQL includes it.
 function serverDate(value: string): Date {
@@ -45,22 +45,64 @@ export function adminError(error: unknown): string {
   return 'Дію не дозволено для поточного стану голосування. Оновіть дані.';
 }
 
+export interface DraftCandidate { id?: string; name: string }
+
 export async function syncCandidates(
   api: {
     getElectionDetail: (id: string) => Promise<AdminElection>;
     removeCandidate: (id: string, candidateId: string) => Promise<unknown>;
-    addCandidate: (id: string, data: { name: string; description?: string }) => Promise<unknown>;
+    addCandidate: (id: string, data: { name: string }) => Promise<unknown>;
+    updateCandidate: (id: string, candidateId: string, data: { name: string }) => Promise<unknown>;
   },
   id: string,
-  names: string[],
+  desired: DraftCandidate[],
 ) {
   const current = await api.getElectionDetail(id);
   if (current.status !== 'draft') throw new Error('Election is no longer a draft');
-  for (const candidate of current.candidates) {
-    if (!names.includes(candidate.name)) await api.removeCandidate(id, candidate.id);
+  // New rows can already exist after a lost add response. Match those by name;
+  // existing rows always retain identity even when the name changes.
+  const targets = desired.map(row => ({ ...row,
+    id: row.id ?? current.candidates.find(candidate => candidate.name === row.name)?.id }));
+  for (const row of targets) {
+    if (row.id && !current.candidates.some(candidate => candidate.id === row.id)) {
+      throw new Error('Кандидата змінено в іншому вікні. Оновіть чернетку.');
+    }
   }
-  for (const name of names) {
-    if (!current.candidates.some(candidate => candidate.name === name)) await api.addCandidate(id, { name });
+  for (const candidate of current.candidates) {
+    if (!targets.some(row => row.id === candidate.id)) await api.removeCandidate(id, candidate.id);
+  }
+  for (const row of targets) {
+    if (row.id) {
+      if (current.candidates.find(candidate => candidate.id === row.id)?.name !== row.name) {
+        await api.updateCandidate(id, row.id, { name: row.name });
+      }
+    } else await api.addCandidate(id, { name: row.name });
   }
   return api.getElectionDetail(id);
+}
+
+export async function reconcilePublication(
+  api: {
+    publishResults: (id: string) => Promise<unknown>;
+    unpublishResults: (id: string) => Promise<unknown>;
+    getAdminResults: (id: string) => Promise<AdminElectionResults>;
+  },
+  id: string,
+  published: boolean,
+) {
+  let actionError = '';
+  try {
+    if (published) await api.publishResults(id);
+    else await api.unpublishResults(id);
+  } catch (error) { actionError = adminError(error); }
+  try {
+    const results = await api.getAdminResults(id);
+    // A failed/lost mutation response is resolved only by the requested state,
+    // not merely by a successful GET.
+    if (results.results_published === published) actionError = '';
+    else actionError ||= 'Зміну публікації не підтверджено. Повторіть дію.';
+    return { results, actionError, loadError: '' };
+  } catch (error) {
+    return { results: null, actionError: actionError || 'Не вдалося підтвердити стан публікації. Оновіть результати перед наступною дією.', loadError: adminError(error) };
+  }
 }

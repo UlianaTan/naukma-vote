@@ -23,6 +23,7 @@ export function AuditLogPage() {
   }, [id, offset]);
   const auditLogs = page.logs;
   const labels: Record<string, string> = {
+    'candidate.updated': 'Редагування кандидата',
     'election.created': 'Створення голосування',
     'election.activated': 'Запуск голосування',
     'election.closed': 'Закриття голосування',
