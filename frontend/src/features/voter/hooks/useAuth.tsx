@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
-import { api } from "../../../lib/api";
-import { API_BASE_URL, SESSION_EXPIRED_EVENT, sessionEpoch } from "../../../lib/session";
+import { api, ApiError } from "../../../lib/api";
+import { API_BASE_URL, SESSION_EXPIRED_EVENT, sessionEpoch, assertSessionEpoch, clearSession } from "../../../lib/session";
 import { loadSession } from "../../../lib/loadSession";
 import type { User } from "../types";
 
@@ -11,6 +11,9 @@ interface AuthContextValue {
   sessionError: string | null;
   retrySession: () => void;
   login: () => void;
+  loginWithPassword: (email: string, password: string) => Promise<void>;
+  register: (email: string, password: string) => Promise<void>;
+  clearError: () => void;
   logout: () => Promise<void>;
 }
 
@@ -60,6 +63,48 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     window.location.href = `${API_BASE_URL}/api/auth/google/login?next=${next}`;
   }
 
+  async function loginWithPassword(email: string, password: string) {
+    setError(null);
+    const epoch = sessionEpoch();
+    try {
+      const result = await api.post<{ user: User }>("/api/auth/login", { email, password });
+      assertSessionEpoch(epoch);
+      clearSession();
+      setUser(result.user);
+      setSessionError(null);
+      setIsLoading(false);
+    } catch (e) {
+      if (epoch !== sessionEpoch()) throw e;
+      setError(e instanceof ApiError && e.status === 401
+        ? "Неправильна адреса електронної пошти або пароль."
+        : "Не вдалося виконати вхід. Спробуйте пізніше.");
+      throw e;
+    }
+  }
+
+  async function register(email: string, password: string) {
+    setError(null);
+    const epoch = sessionEpoch();
+    try {
+      const result = await api.post<{ user: User }>("/api/auth/register", { email, password });
+      assertSessionEpoch(epoch);
+      clearSession();
+      setUser(result.user);
+      setSessionError(null);
+      setIsLoading(false);
+    } catch (e) {
+      if (epoch !== sessionEpoch()) throw e;
+      setError(e instanceof ApiError && e.status === 409
+        ? "Обліковий запис із цією адресою вже існує. Увійдіть за паролем або через Google."
+        : e instanceof ApiError && e.status === 400
+          ? "Реєстрація доступна лише для адрес @ukma.edu.ua."
+          : e instanceof ApiError && e.status === 422
+            ? "Перевірте адресу та пароль (не менше 12 символів)."
+            : "Не вдалося зареєструватися. Спробуйте пізніше.");
+      throw e;
+    }
+  }
+
   async function logout() {
     setError(null);
     try {
@@ -73,7 +118,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }
 
   return (
-    <AuthContext.Provider value={{ user, isLoading, error, sessionError, retrySession, login, logout }}>
+    <AuthContext.Provider value={{ user, isLoading, error, sessionError, retrySession, login, loginWithPassword, register, clearError: () => setError(null), logout }}>
       {children}
     </AuthContext.Provider>
   );

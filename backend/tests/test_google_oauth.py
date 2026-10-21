@@ -253,3 +253,16 @@ class GoogleOAuthTests(ApiTestCase):
             response = await self.callback(state)
         self.assert_error(response, 'auth_unavailable')
         self.assertNotIn('private-', response.text + str(response.headers))
+
+    async def test_unverified_password_account_is_not_silently_linked_to_google(self):
+        from app.services.passwords import hash_password
+        async with self.Session() as db:
+            user = await db.get(User, voter_id(1001))
+            user.password_hash = hash_password("password-account-123")
+            await db.commit()
+        state = await self.begin()
+        with self.google():
+            self.assert_error(await self.callback(state), "account_conflict")
+        async with self.Session() as db:
+            user = await db.get(User, voter_id(1001))
+            self.assertIsNone(user.google_sub)
