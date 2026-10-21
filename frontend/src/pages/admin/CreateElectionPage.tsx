@@ -23,6 +23,11 @@ export const CreateElectionPage = () => {
   const [fileBusy, setFileBusy] = useState(false);
   const fileVersion = useRef(0);
   const [manualEmails, setManualEmails] = useState('');
+  const [votersError, setVotersError] = useState('');
+  const [votersFileError, setVotersFileError] = useState('');
+  const [savedVoters, setSavedVoters] = useState<{ electionId: string; exists: boolean } | null>(null);
+  const [votersLoadError, setVotersLoadError] = useState('');
+  const [votersReload, setVotersReload] = useState(0);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [message, setMessage] = useState('');
   const [loadError, setLoadError] = useState('');
@@ -59,6 +64,19 @@ export const CreateElectionPage = () => {
     return () => { cancelled = true; };
   }, [id, reload]);
 
+  useEffect(() => {
+    let cancelled = false;
+    // Recheck after saving/importing, including the navigate from create to edit.
+    // Cleanup ignores reads started before the latest mutation.
+    if (!savedId || busy) return;
+    adminApi.getVoters(savedId).then(voters => {
+      if (!cancelled) { setSavedVoters({ electionId: savedId, exists: voters.length > 0 }); setVotersLoadError(''); }
+    }).catch(() => {
+      if (!cancelled) { setSavedVoters(null); setVotersLoadError('Не вдалося перевірити збережених виборців. Повторіть перевірку.'); }
+    });
+    return () => { cancelled = true; };
+  }, [savedId, busy, votersReload]);
+
   const handleCandidateChange = (index: number, value: string) => {
     setCandidates(previous => previous.map((row, i) => i === index ? { ...row, name: value } : row));
   };
@@ -70,6 +88,8 @@ export const CreateElectionPage = () => {
     const file = event.target.files?.[0];
     setVotersFile(file || null);
     setFileEmails([]);
+    setVotersFileError('');
+    setVotersError('');
     if (!file) return;
     setFileBusy(true);
     try {
@@ -84,7 +104,7 @@ export const CreateElectionPage = () => {
     } catch (error) {
       if (version === fileVersion.current) {
         setVotersFile(null);
-        setMessage(error instanceof Error ? error.message : 'Не вдалося прочитати файл.');
+        setVotersFileError(error instanceof Error ? error.message : 'Не вдалося прочитати файл.');
       }
     } finally { if (version === fileVersion.current) setFileBusy(false); }
   };
@@ -113,6 +133,11 @@ export const CreateElectionPage = () => {
     busyRef.current = true;
     setBusy(true);
     setMessage('');
+    setVotersError('');
+    // A rejected file must be replaced or removed before a launch attempt.
+    if (targetStatus === 'active' && votersFileError) {
+      busyRef.current = false; setBusy(false); return;
+    }
     let stage = 'Збереження даних';
     let electionId = savedId;
     try {
@@ -165,12 +190,26 @@ export const CreateElectionPage = () => {
         if (fileInputRef.current) fileInputRef.current.value = '';
         const summary = `Додано виборців: ${added}. Уже у списку: ${existing}. Некоректних: ${invalid.length}.`;
         setMessage(summary + (invalid.length ? ' Виправте адреси у полі: ' + invalid.map(item => `${item.value}: ${item.reason}`).join('; ') : ' Чернетку збережено. Можна перевірити список виборців або запустити голосування.'));
-        if (invalid.length || targetStatus === 'draft') return;
+        if (added > 0 || existing > 0) setSavedVoters({ electionId, exists: true });
+        if (invalid.length) {
+          setVotersError('Перевірте адреси виборців. Дозволені лише адреси @ukma.edu.ua. ' +
+            invalid.map(item => `${item.value}: ${item.reason}`).join('; '));
+          return;
+        }
+        if (targetStatus === 'draft') return;
       }
       if (targetStatus === 'active') {
         stage = 'Запуск голосування';
-        if (!(await adminApi.getVoters(electionId)).length) {
-          setMessage('Чернетку збережено. Для запуску додайте хоча б одного виборця.');
+        let voters;
+        try { voters = await adminApi.getVoters(electionId); }
+        catch {
+          setVotersError('Не вдалося перевірити список виборців. Повторіть спробу запуску.');
+          return;
+        }
+        setSavedVoters({ electionId, exists: voters.length > 0 });
+        if (!voters.length) {
+          setVotersError('Для запуску додайте щонайменше одного виборця — завантажте файл або введіть email-адресу.');
+          setMessage('Чернетку збережено.');
           return;
         }
         try { await adminApi.activateElection(electionId); }
@@ -182,6 +221,11 @@ export const CreateElectionPage = () => {
         navigate(`/admin/monitor/${electionId}`);
       } else setMessage('Чернетку збережено. Можна продовжити редагування або запустити голосування.');
     } catch (error) {
+      if (stage === 'Додавання виборців') setVotersError(adminError(error));
+      if (stage === 'Запуск голосування' && adminError(error).includes('Список виборців порожній')) {
+        setSavedVoters(electionId ? { electionId, exists: false } : null);
+        setVotersError('Для запуску додайте щонайменше одного виборця.');
+      }
       setMessage(`${stage}: ${adminError(error)} ${electionId ? 'Чернетка вже існує. Повторне збереження продовжить роботу з нею.' : ''}`);
     } finally { busyRef.current = false; setBusy(false); }
   };
@@ -323,13 +367,17 @@ export const CreateElectionPage = () => {
             </div>
 
             <div>
-              <label className="block text-sm font-bold text-slate-900 mb-4">Виборці</label>
+              <h2 id="voters-heading" className="block text-sm font-bold text-slate-900 mb-2">Виборці</h2>
+              <p id="voters-help" className="mb-4 text-sm text-slate-500">Для запуску потрібен щонайменше один виборець. Дозволені адреси @ukma.edu.ua. Чернетку можна зберегти без виборців.</p>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 <div 
                   onClick={() => fileInputRef.current?.click()}
-                  className="border border-dashed border-slate-300 bg-slate-50/70 rounded-xl p-8 flex flex-col items-center justify-center text-center cursor-pointer hover:bg-slate-100"
+                  className={`border border-dashed ${votersError || votersFileError ? 'border-red-500' : 'border-slate-300'} bg-slate-50/70 rounded-xl p-8 flex flex-col items-center justify-center text-center cursor-pointer hover:bg-slate-100`}
                 >
-                  <input type="file" accept=".csv,.txt,text/csv,text/plain" className="hidden" ref={fileInputRef} onChange={handleFileChange} />
+                  <input type="file" accept=".csv,.txt,text/csv,text/plain" className="hidden" ref={fileInputRef} onChange={handleFileChange}
+                    aria-label="Файл виборців CSV або TXT"
+                    aria-invalid={Boolean(votersFileError || votersError)}
+                    aria-describedby={votersFileError ? 'voters-file-error' : votersError ? 'voters-error' : 'voters-help'} />
                   {votersFile ? (
                     <p className="text-sm text-emerald-700 font-medium">Обрано: {votersFile.name} ({votersCount} виборців)</p>
                   ) : (
@@ -338,16 +386,23 @@ export const CreateElectionPage = () => {
                 </div>
 
                 <div>
-                  <label className="block text-sm font-bold text-slate-900 mb-2">Або додайте email-адреси</label>
-                  <textarea 
+                  <label htmlFor="voter-emails" className="block text-sm font-bold text-slate-900 mb-2">Або додайте email-адреси</label>
+                  <textarea
+                    id="voter-emails"
                     rows={5}
                     value={manualEmails}
-                    onChange={(e) => setManualEmails(e.target.value)}
+                    onChange={(e) => { setManualEmails(e.target.value); setVotersError(''); }}
                     placeholder="student@ukma.edu.ua&#10;Одна адреса в кожному рядку"
-                    className="w-full border border-slate-300 rounded-lg px-4 py-3 text-sm text-slate-900 focus:outline-none resize-none"
+                    aria-invalid={Boolean(votersError)}
+                    aria-describedby={votersError ? 'voters-help voters-error' : 'voters-help'}
+                    className={`w-full border ${votersError ? 'border-red-500' : 'border-slate-300'} rounded-lg px-4 py-3 text-sm text-slate-900 focus:outline-none resize-none`}
                   />
                 </div>
               </div>
+              {votersFileError && <p id="voters-file-error" role="alert" className="mt-2 text-xs font-medium text-red-600">{votersFileError} Оберіть інший файл.</p>}
+              {votersError && <p id="voters-error" role="alert" className="mt-2 break-words text-xs font-medium text-red-600">{votersError}</p>}
+              {votersLoadError && <p role="alert" className="mt-3 text-sm text-red-700">{votersLoadError} <button type="button" className="underline" onClick={() => setVotersReload(value => value + 1)}>Повторити перевірку виборців</button></p>}
+              {savedVoters?.electionId === savedId && savedVoters?.exists && <p role="status" className="mt-4 rounded-xl border border-blue-100 bg-blue-50 px-4 py-3 text-sm leading-6 text-blue-950">Вказаних виборців уже збережено в базі. Порожні поля не означають, що список порожній. Переглянути або змінити список можна через «Перевірити список виборців».</p>}
             </div>
             
             <div className="flex items-center justify-between pt-6 mt-8 border-t border-slate-100">
