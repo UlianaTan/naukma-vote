@@ -1,6 +1,6 @@
 """Інтеграційні тести паралельності на справжньому PostgreSQL.
 
-Локально пропускаються без TEST_DATABASE_URL. CI запускає їх на окремій PostgreSQL 16.
+Локально пропускаються без TEST_DATABASE_URL. CI запускає їх на окремій PostgreSQL 18.
 Запуск:
 
     export TEST_DATABASE_URL=postgresql+asyncpg://user:pass@localhost:5432/naukma_vote_test
@@ -27,6 +27,7 @@ from app.models.voting import (
 from app.services import election_service
 from app.services.integrity_service import CRITICAL, validate_database
 from app.services.voting_service import VotingService
+from tests import test_qa_api as qa
 
 URL = os.getenv("TEST_DATABASE_URL")
 
@@ -142,6 +143,50 @@ class PgConcurrencyTests(unittest.IsolatedAsyncioTestCase):
         # Підрахунок після закриття не змінюється
         await asyncio.sleep(0.05)
         self.assertEqual(await self.counts(election.id), (ballots, parts))
+
+
+@unittest.skipUnless(URL, "TEST_DATABASE_URL не задано")
+class DraftLifecycleRaceTests(qa.ApiTestCase):
+    async def test_parallel_activate_and_close_are_idempotent(self):
+        draft = await self.create_draft()
+        eid = draft["id"]
+        await self.add_voters(eid, (1001,))
+        for action in ("activate", "close"):
+            responses = await asyncio.gather(*(self.lifecycle(eid, action) for _ in range(6)))
+            self.assertEqual([r.status_code for r in responses], [200] * 6)
+            self.assertEqual(sum(r.json()["changed"] for r in responses), 1)
+        async with self.Session() as db:
+            for action in ("election.activated", "election.closed"):
+                from app.models.voting import AuditLog
+                count = await db.scalar(select(func.count()).select_from(AuditLog).where(
+                    AuditLog.election_id == uuid.UUID(eid), AuditLog.action == action))
+                self.assertEqual(count, 1)
+
+    async def test_candidate_and_whitelist_edits_racing_activation_respect_draft_lock(self):
+        for kind in ("candidate", "voter"):
+            with self.subTest(kind=kind):
+                draft = await self.create_draft()
+                eid = draft["id"]
+                await self.add_voters(eid, (1001,))
+                path = f"{qa.ADMIN}/{eid}"
+                if kind == "candidate":
+                    edit = self.client.post(path + "/candidates", json={"name": "Новий кандидат"})
+                else:
+                    edit = self.client.post(path + "/voters", json={"emails": [qa.voter_email(1002)]})
+                edited, activated = await asyncio.gather(edit, self.lifecycle(eid, "activate"))
+                self.assertEqual(activated.status_code, 200, activated.text)
+                self.assertIn(edited.status_code, (200, 201, 400))
+                # A request after activation is always rejected, regardless of the race winner.
+                after = await self.client.post(path + "/candidates", json={"name": "Пізній кандидат"})
+                self.assertEqual(after.status_code, 400)
+                after = await self.client.post(path + "/voters", json={"emails": [qa.voter_email(1003)]})
+                self.assertEqual(after.status_code, 400)
+                async with self.Session() as db:
+                    ids = await db.scalars(select(Candidate.name).where(Candidate.election_id == uuid.UUID(eid)))
+                    self.assertEqual("Новий кандидат" in ids.all(), kind == "candidate" and edited.status_code == 201)
+                    count = await db.scalar(select(func.count()).select_from(EligibleVoter).where(
+                        EligibleVoter.election_id == uuid.UUID(eid)))
+                    self.assertEqual(count, 2 if kind == "voter" and edited.status_code == 200 else 1)
 
 
 if __name__ == "__main__":

@@ -1,7 +1,11 @@
-"""Конфігурація середовища (змінні оточення) та перевірка production-налаштувань."""
+"""Конфігурація середовища та перевірки staging/production перед запуском."""
+import math
 import os
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import urlsplit
+
+from sqlalchemy.engine import make_url
 
 from dotenv import load_dotenv
 
@@ -18,16 +22,32 @@ DEFAULT_LOCAL_DATABASE_MARKER = "postgres:postgres@"
 
 def _env_bool(name: str, default: bool) -> bool:
     raw = os.getenv(name)
-    if raw is None or raw.strip() == "":
+    if raw is None or not raw.strip():
         return default
-    return raw.strip().lower() in {"1", "true", "yes", "on"}
+    value = raw.strip().lower()
+    if value not in {"1", "true", "yes", "on", "0", "false", "no", "off"}:
+        raise ValueError(f"{name}: очікується true або false")
+    return value in {"1", "true", "yes", "on"}
 
 
 def _env_float(name: str, default: float) -> float:
     try:
-        return float(os.getenv(name, default))
+        value = float(os.getenv(name, str(default)))
+        if not math.isfinite(value) or value <= 0:
+            raise ValueError
+        return value
     except ValueError:
-        return default
+        raise ValueError(f"{name}: очікується додатне число") from None
+
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        value = int(os.getenv(name, str(default)))
+        if value <= 0:
+            raise ValueError
+        return value
+    except ValueError:
+        raise ValueError(f"{name}: очікується додатне ціле число") from None
 
 
 @dataclass(frozen=True)
@@ -83,37 +103,70 @@ def get_settings() -> Settings:
         allowed_email_domain=os.getenv("ALLOWED_EMAIL_DOMAIN", "ukma.edu.ua").strip().lstrip("@").lower(),
         database_url=os.getenv("DATABASE_URL", ""),
         session_secret=os.getenv("SESSION_SECRET", ""),
-        access_expires_seconds=int(os.getenv("ACCESS_EXPIRES_SECONDS", "900")),
-        refresh_expires_seconds=int(os.getenv("REFRESH_EXPIRES_SECONDS", "2592000")),
+        access_expires_seconds=_env_int("ACCESS_EXPIRES_SECONDS", 900),
+        refresh_expires_seconds=_env_int("REFRESH_EXPIRES_SECONDS", 2592000),
         google_client_id=os.getenv("GOOGLE_CLIENT_ID", ""),
         google_client_secret=os.getenv("GOOGLE_CLIENT_SECRET", ""),
         google_redirect_uri=os.getenv("GOOGLE_REDIRECT_URI", ""),
     )
 
 
-def production_problems(settings: Settings) -> list[str]:
-    """Критичні проблеми конфігурації; у production застосунок з ними не стартує."""
-    if not settings.is_production:
+def _https_url(value: str, *, origin: bool = False) -> bool:
+    if any(ord(character) <= 32 for character in value):
+        return False
+    try:
+        parsed = urlsplit(value)
+        _ = parsed.port
+        return bool(
+            parsed.scheme == "https" and parsed.hostname
+            and parsed.hostname not in {"localhost", "127.0.0.1", "::1"}
+            and not parsed.username and not parsed.password
+            and not parsed.query and not parsed.fragment
+            and (not origin or parsed.path == "")
+        )
+    except ValueError:
+        return False
+
+
+def deployment_problems(settings: Settings) -> list[str]:
+    """Fail closed for unknown environments; staging and production share safeguards."""
+    if settings.app_env not in {"local", "staging", "production"}:
+        return ["APP_ENV має бути local, staging або production"]
+    if settings.app_env == "local":
         return []
     problems: list[str] = []
     if settings.allow_mock_auth:
-        problems.append("ALLOW_MOCK_AUTH=true заборонено в production (mock X-User-Id)")
-    if not settings.database_url:
-        problems.append("DATABASE_URL не задано")
-    elif DEFAULT_LOCAL_DATABASE_MARKER in settings.database_url or "@localhost" in settings.database_url:
-        problems.append("DATABASE_URL вказує на локальну БД/дефолтні облікові дані")
-    if not settings.frontend_origins:
-        problems.append("FRONTEND_ORIGIN не задано (потрібен для CORS)")
-    for origin in settings.frontend_origins:
-        if not origin.startswith("https://"):
-            problems.append(f"FRONTEND_ORIGIN має бути https: {origin}")
+        problems.append("ALLOW_MOCK_AUTH=true заборонено поза local")
+    try:
+        database = make_url(settings.database_url)
+        if (database.drivername != "postgresql+asyncpg" or not database.database
+                or not database.host or database.host.lower() in {"localhost", "127.0.0.1", "::1"}
+                or DEFAULT_LOCAL_DATABASE_MARKER in settings.database_url):
+            problems.append("DATABASE_URL має вказувати на окрему PostgreSQL через asyncpg")
+    except Exception:
+        problems.append("DATABASE_URL не задано або має некоректний формат")
+    if not settings.frontend_origins or any(not _https_url(o, origin=True) for o in settings.frontend_origins):
+        problems.append("FRONTEND_ORIGIN має містити точні HTTPS origin без шляху, query або wildcard")
+    if any("*" in origin for origin in settings.frontend_origins):
+        problems.append("Wildcard у FRONTEND_ORIGIN заборонено")
     if not settings.closer_enabled:
         problems.append("ELECTION_CLOSER_ENABLED=false: таймер закриття вимкнено")
-    if len(settings.session_secret.encode()) < 32:
+    if len(settings.session_secret.encode()) < 32 or not settings.session_secret.strip():
         problems.append("SESSION_SECRET має містити щонайменше 32 байти")
-    # GOOGLE keys are optional; if frontend expects google auth in production, these must be set
-    if settings.google_client_id == "" or settings.google_client_secret == "":
+    if not settings.google_client_id.strip() or not settings.google_client_secret.strip():
         problems.append("GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET не задані")
-    if settings.google_redirect_uri == "":
-        problems.append("GOOGLE_REDIRECT_URI не задано")
+    if (not _https_url(settings.google_redirect_uri)
+            or urlsplit(settings.google_redirect_uri).path != "/api/auth/google/callback"):
+        problems.append("GOOGLE_REDIRECT_URI має бути точним HTTPS callback /api/auth/google/callback")
+    if not settings.allowed_email_domain:
+        problems.append("ALLOWED_EMAIL_DOMAIN не може бути порожнім для університетського входу")
+    try:
+        _ = settings.cookie_samesite
+    except ValueError:
+        problems.append("SESSION_COOKIE_SAMESITE має бути lax, strict або none")
     return problems
+
+
+def production_problems(settings: Settings) -> list[str]:
+    """Compatibility alias for existing callers; includes staging safeguards."""
+    return deployment_problems(settings)

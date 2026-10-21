@@ -9,9 +9,15 @@ python3.13 -m venv .venv
 .venv/bin/pip install -r backend/requirements-dev.txt
 cp backend/.env.example backend/.env
 # Налаштувати DATABASE_URL для окремої локальної PostgreSQL.
-.venv/bin/alembic upgrade head
+.venv/bin/python -m alembic current
+.venv/bin/python -m alembic upgrade head
+.venv/bin/python -m alembic check
 .venv/bin/python -m uvicorn app.main:app --app-dir backend --reload
 ```
+
+Звичайний запуск не створює таблиці в жодному середовищі: навіть локально спочатку
+застосуйте Alembic до окремої PostgreSQL 18. Інструкція першого запуску й оновлення
+наявної БД — у [docs/deployment.md](../docs/deployment.md).
 
 Runtime-залежності: requirements.txt. Dev-залежності та Ruff: requirements-dev.txt.
 
@@ -60,7 +66,7 @@ cd backend && ../.venv/bin/python -m app.cli.validate_data [election_id]
 `X-User-Id` більше не визначає особу, тестовий адміністратор автоматично не створюється.
 Google OAuth callback видає сесію; окремий `/api/auth/login` залишається mock-входом
 лише при `ALLOW_MOCK_AUTH=true` (за замовчуванням дозволений тільки локально).
-На staging задавайте `ALLOW_MOCK_AUTH=false`; у production mock заборонено.
+На staging і production `ALLOW_MOCK_AUTH=true` заборонено під час запуску.
 Cookies/CSRF і спільний refresh підключено; реальний Google OAuth та політики
 cookies у браузерах staging ще потрібно перевірити.
 
@@ -150,3 +156,14 @@ auth_unavailable або account_conflict. Якщо жоден frontend origin н
 Тести `test_google_oauth.py` підміняють Google, а не перевіряють реальний Google-вхід.
 `test_google_identity_migration.py` перевіряє нову міграцію ізольовано на SQLite;
 повний ланцюжок міграцій і паралельний вхід перевіряються на PostgreSQL у CI.
+
+
+## Deployment readiness regressions
+
+`tests/test_deployment_readiness.py` перевіряє відмову запуску без міграцій,
+відсутність автоматичних змін схеми, налаштування staging/production і приватність логів.
+`tests/test_pg_migrations.py` на окремій PostgreSQL 18 перевіряє весь ланцюжок
+міграцій, збереження наявних користувачів/авторства/голосів та відмову при
+неоднозначних старих акаунтах. Як і concurrency-тести, він вимагає
+`TEST_DATABASE_URL` із назвою БД, що закінчується на `_test` або `_ci`, і змінює
+лише власні випадкові схеми. Без PostgreSQL ці перевірки явно пропускаються.
