@@ -21,14 +21,13 @@
 | `DATABASE_URL` | локальна PostgreSQL | Підключення (`postgresql+asyncpg://…`) |
 | `APP_ENV` | `local` | `production` вмикає fail-fast перевірку конфігурації |
 | `FRONTEND_ORIGIN` | — | CORS; у production обов'язково, лише `https://` |
-| `ALLOW_MOCK_AUTH` | `true` (поза production), `false` (production) | Mock `X-User-Id` |
 | `ELECTION_CLOSER_ENABLED` | `true` | Таймер закриття |
 | `ELECTION_CLOSER_INTERVAL_SECONDS` | `5` | Період перевірки (мін. 1) |
 | `ALLOWED_EMAIL_DOMAIN` | `ukma.edu.ua` | Домен у списках виборців |
 
 У production застосунок **не стартує**, якщо: увімкнено mock-авторизацію, `DATABASE_URL`
 порожній або локальний, немає https `FRONTEND_ORIGIN`, вимкнено таймер.
-Тому до інтеграції Auth-модуля production-запуск навмисно неможливий.
+Облікові записи мають бути створені оператором до входу користувачів.
 
 ## Закриття за таймером
 
@@ -67,8 +66,9 @@
 ## Production-чекліст backend
 
 - [ ] Резервна копія й перевірене відновлення БД
-- [ ] `alembic upgrade head` без помилок; `alembic current` = `7d3b9f1a5c82`
-- [ ] `APP_ENV=production`, `ALLOW_MOCK_AUTH=false`, https `FRONTEND_ORIGIN`
+- [ ] `alembic upgrade head` без помилок; `alembic current` = `a3b2c1d4e5f6`
+- [ ] `APP_ENV=production`, https `FRONTEND_ORIGIN`
+- [ ] Apply edge rate limiting to `/api/auth/login` before exposing it publicly
 - [ ] Auth-модуль підключено (заміна `get_current_user`/`require_organizer`)
 - [ ] `/health/ready` = 200; таймер працює (закриття тестового голосування)
 - [ ] `python -m app.cli.validate_data` → критичних 0

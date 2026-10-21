@@ -4,22 +4,22 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Request, Response, Depends
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy import text
 
 from app.api.v1.admin_elections import router as admin_elections_router
 from app.api.v1.elections import router as elections_router
 from app.api.v1.auth import router as auth_router
-from app.core.config import get_settings, deployment_problems
+from app.core.config import get_settings, production_problems
 from app.core.dependencies import get_current_user
 from app.database import AsyncSessionLocal, engine
 from app.services.closer import run_closer_loop
-from app.core.schema import SchemaNotReady, verify_schema
-from app.core.logging import configure_private_logging
+from app.services.dev_accounts import provision_local_demo_accounts
+from app.models.voting import Base as ModelsBase
 from app.middleware.csrf import csrf_protect
 
 from prometheus_client import Counter, Histogram, generate_latest, CONTENT_TYPE_LATEST
 import time
 
-configure_private_logging()
 logger = logging.getLogger("naukma.app")
 
 
@@ -27,17 +27,19 @@ logger = logging.getLogger("naukma.app")
 async def lifespan(app: FastAPI):
     settings = get_settings()
 
-    problems = deployment_problems(settings)
+    # У production небезпечна конфігурація = відмова стартувати (fail fast)
+    problems = production_problems(settings)
     if problems:
-        raise RuntimeError("Небезпечна конфігурація: " + "; ".join(problems))
+        raise RuntimeError("Небезпечна production-конфігурація: " + "; ".join(problems))
 
-    # All environments use Alembic. Startup only reads the current schema.
+    # Для локальної розробки: створюємо таблиці з моделей, якщо їх ще нема.
     try:
-        await asyncio.wait_for(verify_schema(engine), timeout=10)
-    except SchemaNotReady as exc:
-        raise RuntimeError(str(exc)) from None
+        async with engine.begin() as conn:
+            await conn.run_sync(ModelsBase.metadata.create_all)
     except Exception:
-        raise RuntimeError("Не вдалося перевірити БД. Перевірте доступність і налаштування підключення.") from None
+        logger.exception("Error while creating metadata tables")
+
+    await provision_local_demo_accounts()
 
     stop_event = asyncio.Event()
     closer_task = None
@@ -91,12 +93,13 @@ async def health():
 
 @app.get("/health/ready", tags=["Ops"])
 async def health_ready():
-    """Готовність: БД доступна й має потрібну версію схеми."""
+    """Готовність: БД відповідає. Деталі помилки не розкриваються."""
     try:
-        await asyncio.wait_for(verify_schema(engine), timeout=10)
+        async with engine.connect() as conn:
+            await conn.execute(text("SELECT 1"))
     except Exception:  # noqa: BLE001
-        logger.error("Перевірка готовності БД не пройшла")
-        raise HTTPException(status_code=503, detail="Database schema unavailable or not ready")
+        logger.exception("Перевірка готовності: БД недоступна")
+        raise HTTPException(status_code=503, detail="Database unavailable")
     return {"status": "ready"}
 
 
@@ -119,11 +122,8 @@ async def prometheus_middleware(request: Request, call_next):
         raise
     latency = time.time() - start
     try:
-        # Route templates bound cardinality; IDs and arbitrary 404 paths must
-        # never allocate a separate Prometheus series. Normalize unknown verbs too.
-        route = request.scope.get("route")
-        path = getattr(route, "path", None) or "unmatched"
-        method = request.method if request.method in {"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS", "TRACE", "CONNECT"} else "OTHER"
+        path = request.url.path
+        method = request.method
         status = str(response.status_code)
         HTTP_REQUEST_LATENCY.labels(method=method, path=path).observe(latency)
         HTTP_REQUESTS_TOTAL.labels(method=method, path=path, status=status).inc()

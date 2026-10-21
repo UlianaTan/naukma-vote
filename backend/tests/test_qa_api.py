@@ -80,7 +80,6 @@ class ApiTestCase(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.env = mock.patch.dict(os.environ, {
             "SESSION_SECRET": "qa-session-secret-" * 4,
-            "ALLOW_MOCK_AUTH": "false",
         })
         self.env.start()
         self.addCleanup(self.env.stop)
@@ -262,7 +261,7 @@ class Week4AccessTests(ApiTestCase):
 
     async def test_mock_auth_disabled_returns_401_everywhere(self):
         """Як у production: без mock-авторизації і виборчі, і адмін-ендпоінти дають 401."""
-        env = {"APP_ENV": "production", "ALLOW_MOCK_AUTH": "false"}
+        env = {"APP_ENV": "production"}
         with mock.patch.dict(os.environ, env):
             admin_resp = await self.client.get(ADMIN, headers={"Cookie": ""})
             voter_resp = await self.client.get(PUBLIC, headers={"Cookie": "", "X-User-Id": str(voter_id(1001))})
@@ -926,15 +925,13 @@ class SessionAuthenticationTests(ApiTestCase):
         claims["exp"] = int((datetime.now(timezone.utc) - HOUR).timestamp())
         expired = jwt.encode(claims, os.environ["SESSION_SECRET"], algorithm="HS256")
         missing_user = create_access_token(str(uuid.uuid4()))
-        for mock_enabled in ["false", "true"]:
-            with mock.patch.dict(os.environ, {"ALLOW_MOCK_AUTH": mock_enabled}):
-                for token in [None, "broken", valid + "tampered", expired, missing_user]:
-                    headers = {"Cookie": f"access_token={token}" if token else "",
-                               "X-User-Id": str(ADMIN_ID)}
-                    for path in ["/api/auth/me", ADMIN, PUBLIC]:
-                        with self.subTest(mock=mock_enabled, token=token, path=path):
-                            response = await self.client.get(path, headers=headers)
-                            self.assertEqual(response.status_code, 401, response.text)
+        for token in [None, "broken", valid + "tampered", expired, missing_user]:
+            headers = {"Cookie": f"access_token={token}" if token else "",
+                       "X-User-Id": str(ADMIN_ID)}
+            for path in ["/api/auth/me", ADMIN, PUBLIC]:
+                with self.subTest(token=token, path=path):
+                    response = await self.client.get(path, headers=headers)
+                    self.assertEqual(response.status_code, 401, response.text)
 
     async def test_user_id_header_cannot_impersonate_admin_or_voter(self):
         headers = {**vh(1001), "X-User-Id": str(ADMIN_ID)}
@@ -971,11 +968,16 @@ class SessionAuthenticationTests(ApiTestCase):
         self.assertIn("CSRF", response.json()["detail"])
 
     async def test_issued_login_cookie_works_for_me_and_voting(self):
-        # Use the same token issuance path as OAuth, without contacting Google.
+        from app.services.passwords import hash_password
+        async with self.Session() as session:
+            user = await session.get(User, voter_id(1001))
+            user.password_hash = hash_password("test-password-123")
+            await session.commit()
         transport = httpx.ASGITransport(app=app)
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as browser:
-            with mock.patch.dict(os.environ, {"ALLOW_MOCK_AUTH": "true"}):
-                login = await browser.post("/api/auth/login")
+            login = await browser.post("/api/auth/login", json={
+                "email": voter_email(1001), "password": "test-password-123",
+            })
             self.assertEqual(login.status_code, 200, login.text)
             self.assertIn("access_token", browser.cookies)
             response = await browser.get("/api/auth/me")
@@ -1082,14 +1084,19 @@ class ElectionOwnershipTests(ApiTestCase):
 
 class BrowserSessionTests(ApiTestCase):
     async def browser_login(self, browser):
-        with mock.patch.dict(os.environ, {"ALLOW_MOCK_AUTH": "true"}):
-            response = await browser.post("/api/auth/login")
+        from app.services.passwords import hash_password
+        async with self.Session() as session:
+            user = await session.get(User, voter_id(1001))
+            user.password_hash = hash_password("test-password-123")
+            await session.commit()
+        response = await browser.post("/api/auth/login", json={
+            "email": voter_email(1001), "password": "test-password-123",
+        })
         self.assertEqual(response.status_code, 200, response.text)
         return response
 
-    async def test_staging_cookie_attributes_and_oauth_state(self):
-        env = {"APP_ENV": "staging", "FRONTEND_ORIGIN": "https://frontend.test", "SESSION_COOKIE_SAMESITE": "none",
-               "GOOGLE_CLIENT_ID": "test-client", "GOOGLE_CLIENT_SECRET": "test-secret", "GOOGLE_REDIRECT_URI": "https://backend.test/api/auth/google/callback"}
+    async def test_staging_cookie_attributes(self):
+        env = {"APP_ENV": "staging", "FRONTEND_ORIGIN": "https://frontend.test", "SESSION_COOKIE_SAMESITE": "none"}
         with mock.patch.dict(os.environ, env):
             async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="https://backend.test") as browser:
                 login = await self.browser_login(browser)
@@ -1100,11 +1107,6 @@ class BrowserSessionTests(ApiTestCase):
                         self.assertIn(attribute, value)
                     self.assertNotIn("Domain=", value)
                 self.assertEqual((await browser.get("/api/auth/me")).status_code, 200)
-                oauth = await browser.get("/api/auth/google/login")
-                self.assertEqual(oauth.status_code, 303)
-                for value in oauth.headers.get_list("set-cookie"):
-                    for attribute in ["Secure", "HttpOnly", "SameSite=lax", "Max-Age=600"]:
-                        self.assertIn(attribute, value)
 
     async def test_csrf_bootstrap_refresh_and_logout(self):
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as browser:
@@ -1149,35 +1151,6 @@ class BrowserSessionTests(ApiTestCase):
                 await session.execute(update(RefreshToken).values(expires_at=datetime.now(timezone.utc) - HOUR))
                 await session.commit()
             self.assertEqual((await browser.get("/api/auth/csrf")).status_code, 401)
-
-    async def test_google_callback_uses_same_secure_cookie_policy(self):
-        from app.api.v1 import auth
-        from urllib.parse import parse_qs, urlparse
-        env = {"APP_ENV": "staging", "FRONTEND_ORIGIN": "https://frontend.test",
-               "SESSION_COOKIE_SAMESITE": "none", "GOOGLE_CLIENT_ID": "test-client", "GOOGLE_CLIENT_SECRET": "test-secret",
-               "GOOGLE_REDIRECT_URI": "https://backend.test/api/auth/google/callback"}
-        with mock.patch.dict(os.environ, env):
-            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="https://backend.test") as browser:
-                redirect = await browser.get("/api/auth/google/login")
-                state = parse_qs(urlparse(redirect.headers["location"]).query)["state"][0]
-                google = mock.MagicMock()
-                google.post = mock.AsyncMock(return_value=httpx.Response(200, json={"access_token": "google-test-token"}))
-                google.get = mock.AsyncMock(return_value=httpx.Response(200, json={"sub": "google-test-1001", "email": voter_email(1001), "email_verified": True, "hd": "ukma.edu.ua"}))
-                context = mock.MagicMock()
-                context.__aenter__ = mock.AsyncMock(return_value=google)
-                context.__aexit__ = mock.AsyncMock(return_value=False)
-                with mock.patch.object(auth.httpx, "AsyncClient", return_value=context):
-                    callback = await browser.get("/api/auth/google/callback", params={"code": "test-code", "state": state})
-                self.assertEqual(callback.status_code, 303, callback.text)
-                self.assertEqual(callback.headers["location"], "https://frontend.test")
-                for name in ["access_token", "refresh_token", "csrf_token"]:
-                    value = next(c for c in callback.headers.get_list("set-cookie") if c.startswith(name + "="))
-                    self.assertIn("SameSite=none", value)
-                    self.assertIn("Secure", value)
-                    self.assertIn("HttpOnly", value)
-                self.assertIsNone(browser.cookies.get("oauth_state"))
-                self.assertIsNone(browser.cookies.get("oauth_next"))
-                self.assertEqual((await browser.get("/api/auth/me")).json()["id"], str(voter_id(1001)))
 
     async def test_cors_preflight_allows_csrf_only_for_configured_frontend(self):
         allowed = await self.client.options("/api/auth/refresh", headers={

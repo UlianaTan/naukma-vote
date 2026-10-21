@@ -29,7 +29,6 @@ class AuditAction(str, enum.Enum):
     ELECTION_UPDATED = "election.updated"
     ELECTION_DELETED = "election.deleted"
     CANDIDATE_ADDED = "candidate.added"
-    CANDIDATE_UPDATED = "candidate.updated"
     CANDIDATE_REMOVED = "candidate.removed"
     VOTERS_ADDED = "voters.added"
     VOTER_REMOVED = "voter.removed"

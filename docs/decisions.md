@@ -11,7 +11,7 @@
 
 - Підтвердити стек та версії Python/Node, менеджери залежностей.
 - Визначити авторів перших каркасів frontend і backend.
-- Backend Auth + frontend: cookies чи JWT, OAuth callback, CORS/CSRF.
+- Backend Auth + frontend: JWT у HttpOnly cookies, CORS/CSRF і безпечне provisioning користувачів.
 - Backend Core + QA: що саме гарантує анонімність, хто має доступ до БД,
   як забезпечується один голос і чи можна його змінити до закриття.
 - DevOps + команда: хостинг, бюджет, власники акаунтів і тестове середовище.

@@ -1,33 +1,43 @@
-import { useRef, useState } from 'react';
-import { sessionEpoch } from '../../../lib/session';
-import { voterApi, voterError, VoteUncertainError } from '../services/voterApi';
+// TODO: mock, замінити на реальний POST /api/elections/:id/vote
+import { useState } from "react";
+import type { SubmitVoteResponse } from "../types";
 
-export function useSubmitVote() {
-  const pending = useRef(false);
+interface UseSubmitVoteResult {
+  submitVote: (electionId: string, candidateId: string) => Promise<SubmitVoteResponse>;
+  isSubmitting: boolean;
+  error: string | null;
+}
+
+const ALREADY_VOTED_ELECTION_IDS = new Set<string>();
+
+export function useSubmitVote(): UseSubmitVoteResult {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [needsVerification, setNeedsVerification] = useState(false);
 
-  async function submitVote(electionId: string, candidateId: string) {
-    if (pending.current || needsVerification) return null;
-    pending.current = true;
+  async function submitVote(electionId: string, candidateId: string): Promise<SubmitVoteResponse> {
     setIsSubmitting(true);
     setError(null);
-    const epoch = sessionEpoch();
+
     try {
-      await voterApi.vote(electionId, candidateId);
-      return epoch === sessionEpoch();
-    } catch (error) {
-      if (epoch === sessionEpoch()) {
-        setNeedsVerification(error instanceof VoteUncertainError);
-        setError(error instanceof VoteUncertainError ? error.message : voterError(error, 'Не вдалося відправити голос.'));
+      await new Promise((resolve) => setTimeout(resolve, 600));
+
+      if (ALREADY_VOTED_ELECTION_IDS.has(electionId)) {
+        throw new Error("Ви вже проголосували в цьому голосуванні");
       }
-      return false;
+      if (!candidateId) {
+        throw new Error("Оберіть кандидата перед відправкою");
+      }
+
+      ALREADY_VOTED_ELECTION_IDS.add(electionId);
+      return { success: true, votedAt: new Date().toISOString() };
+    } catch (e) {
+      const message = e instanceof Error ? e.message : "Не вдалося відправити голос";
+      setError(message);
+      throw e;
     } finally {
-      pending.current = false;
       setIsSubmitting(false);
     }
   }
 
-  return { submitVote, isSubmitting, error, needsVerification };
+  return { submitVote, isSubmitting, error };
 }

@@ -78,17 +78,14 @@ class CsrfTests(unittest.IsolatedAsyncioTestCase):
             return Request({'type': 'http', 'method': method, 'headers': [
                 (b'cookie', cookie.encode()), (b'x-csrf-token', header.encode()),
             ]})
-        with patch.dict(os.environ, {'ALLOW_MOCK_AUTH': 'false'}):
-            await csrf_protect(request('GET'))
-            await csrf_protect(request(header='abc'))
-            for header in ['', 'wrong']:
-                with self.assertRaises(HTTPException) as caught:
-                    await csrf_protect(request(header=header))
-                self.assertEqual(caught.exception.status_code, 403)
-        with patch.dict(os.environ, {'ALLOW_MOCK_AUTH': 'true'}):
-            await csrf_protect(request(cookie=''))
+        await csrf_protect(request('GET'))
+        await csrf_protect(request(header='abc'))
+        for header in ['', 'wrong']:
             with self.assertRaises(HTTPException):
-                await csrf_protect(request())
+                await csrf_protect(request(header=header))
+        with patch.dict(os.environ, {'APP_ENV': 'staging'}):
+            with self.assertRaises(HTTPException):
+                await csrf_protect(request(cookie=''))
 
 
 class CookieConfigTests(unittest.TestCase):

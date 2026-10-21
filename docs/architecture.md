@@ -1,8 +1,8 @@
 # Будова та відповідальність
 
 Браузер студента → React frontend → FastAPI backend → PostgreSQL.
-Google підтверджує особу через OAuth; backend перевіряє токен,
-домен і право конкретної людини брати участь у голосуванні.
+Користувач входить за email і паролем; оператор створює облікові записи
+поза публічним API. Backend перевіряє пароль і видає JWT у session cookies.
 Браузер не підключається безпосередньо до БД.
 
 Frontend показує кнопки та сторінки. Backend вирішує, що дозволено,
@@ -11,7 +11,7 @@ Frontend показує кнопки та сторінки. Backend вирішу
 
 | Учасник | Відповідальність |
 |---|---|
-| Backend Auth & Security | Google OAuth, перевірка домену, сесії, права, CSRF, rate limiting |
+| Backend Auth & Security | Password login, кероване provisioning, JWT-сесії, права, CSRF, rate limiting |
 | Backend Elections & Voting Core | Голосування, кандидати, допуск, прийом голосу, міграції, підрахунок, аудит |
 | Frontend Voter Experience | Вхід, список голосувань, вибір кандидата, підтвердження, результати |
 | Frontend Admin Panel | Створення голосувань, кандидати, списки виборців, явка, результати |

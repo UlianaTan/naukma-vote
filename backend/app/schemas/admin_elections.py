@@ -17,12 +17,6 @@ class CandidateUpdate(BaseModel):
     name: Optional[str] = Field(None, min_length=2, max_length=255)
     description: Optional[str] = Field(None, max_length=1000)
 
-    @model_validator(mode="after")
-    def reject_null_name(self):
-        if "name" in self.model_fields_set and self.name is None:
-            raise ValueError("Ім’я кандидата не може бути null")
-        return self
-
 class CandidateResponse(BaseModel):
     id: uuid.UUID
     election_id: uuid.UUID

@@ -1,5 +1,5 @@
 import axios, { type InternalAxiosRequestConfig } from 'axios';
-import { ApiError, canRefresh, getCsrfToken, isMutation, refreshSession, sessionExpired, sessionVersion, sessionEpoch, assertSessionEpoch, isCsrfMismatch, invalidateCsrfToken } from '../lib/session';
+import { ApiError, canRefresh, getCsrfToken, isMutation, refreshSession, sessionExpired, sessionVersion } from '../lib/session';
 import { API_BASE_URL } from '../lib/api';
 
 /** UUIDs and ISO 8601 dates are serialized as strings by the backend. */
@@ -67,41 +67,26 @@ const api = axios.create({
 });
 
 // Both API clients share CSRF retrieval and a single in-flight refresh.
-type SessionConfig = InternalAxiosRequestConfig & { sessionRetry?: boolean; sessionVersion?: number; sessionEpoch?: number; csrfRetry?: boolean };
+type SessionConfig = InternalAxiosRequestConfig & { sessionRetry?: boolean; sessionVersion?: number };
 api.interceptors.request.use(async (config: SessionConfig) => {
-  config.sessionEpoch ??= sessionEpoch();
-  assertSessionEpoch(config.sessionEpoch);
   config.sessionVersion = sessionVersion();
   try {
     if (isMutation(config.method)) config.headers.set('X-CSRF-Token', await getCsrfToken());
   } catch (error) {
-    assertSessionEpoch(config.sessionEpoch);
     if (error instanceof ApiError && error.status === 401) sessionExpired();
     throw error;
   }
-  assertSessionEpoch(config.sessionEpoch);
   return config;
 });
-api.interceptors.response.use(response => {
-  assertSessionEpoch((response.config as SessionConfig).sessionEpoch ?? sessionEpoch());
-  return response;
-}, async (error: unknown) => {
-  if (!axios.isAxiosError(error) || !error.config) throw error;
+api.interceptors.response.use(response => response, async (error: unknown) => {
+  if (!axios.isAxiosError(error) || !error.config || error.response?.status !== 401) throw error;
   const config = error.config as SessionConfig;
-  assertSessionEpoch(config.sessionEpoch ?? sessionEpoch());
-  if (isMutation(config.method) && !config.csrfRetry && isCsrfMismatch(error.response?.status ?? 0, error.response?.data)) {
-    config.csrfRetry = true;
-    invalidateCsrfToken(String(config.headers.get('X-CSRF-Token') || '') || null);
-    return api.request(config);
-  }
-  if (error.response?.status !== 401) throw error;
   if (config.sessionRetry || !canRefresh(config.url || '')) {
     sessionExpired();
     throw error;
   }
   config.sessionRetry = true;
   await refreshSession(config.sessionVersion ?? sessionVersion());
-  assertSessionEpoch(config.sessionEpoch ?? sessionEpoch());
   return api.request(config);
 });
 
@@ -113,7 +98,7 @@ export const adminApi = {
     ends_at: string;
     candidates?: Array<{ name: string; description?: string }>;
   }) => {
-    const response = await api.post<AdminElection>('/admin/elections', data);
+    const response = await api.post('/admin/elections', data);
     return response.data;
   },
 
@@ -133,7 +118,7 @@ export const adminApi = {
     starts_at?: string;
     ends_at?: string;
   }) => {
-    const response = await api.patch<AdminElection>(`/admin/elections/${electionId}`, data);
+    const response = await api.patch(`/admin/elections/${electionId}`, data);
     return response.data;
   },
 
@@ -143,12 +128,7 @@ export const adminApi = {
   },
 
   addCandidate: async (electionId: string, data: { name: string; description?: string }) => {
-    const response = await api.post<AdminCandidate>(`/admin/elections/${electionId}/candidates`, data);
-    return response.data;
-  },
-
-  updateCandidate: async (electionId: string, candidateId: string, data: { name?: string; description?: string | null }) => {
-    const response = await api.patch<AdminCandidate>(`/admin/elections/${electionId}/candidates/${candidateId}`, data);
+    const response = await api.post(`/admin/elections/${electionId}/candidates`, data);
     return response.data;
   },
 
@@ -169,7 +149,7 @@ export const adminApi = {
   },
 
   addVotersBatch: async (electionId: string, emails: string[]) => {
-    const response = await api.post<{ added: number; already_present: number; duplicates_in_request: number; invalid: { value: string; reason: string }[] }>(`/admin/elections/${electionId}/voters`, { emails });
+    const response = await api.post(`/admin/elections/${electionId}/voters`, { emails });
     return response.data;
   },
 
@@ -225,5 +205,6 @@ export const adminApi = {
   checkIntegrity: async (electionId: string) => {
     const response = await api.get(`/admin/elections/${electionId}/integrity`);
     return response.data;
-  }
+  },
+
 };

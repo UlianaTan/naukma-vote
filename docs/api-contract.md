@@ -73,7 +73,6 @@ GET списку повертає тільки власні голосуванн
 | PATCH `/{id}` | Редагувати чернетку | 400 якщо не чернетка; 422 дати |
 | DELETE `/{id}` | Видалити чернетку | 204; 400 якщо не чернетка |
 | POST `/{id}/candidates`, DELETE `/{id}/candidates/{cid}` | Кандидати (лише чернетка) | 409 дубль імені (без урахування регістру) |
-| PATCH `/{id}/candidates/{cid}` | Змінити name/description за ID, зберігаючи пропущені поля; лише автор і чернетка | 200; 400 після активації; 403 чужий автор; 404 чужий/відсутній кандидат; 409 дубль імені; 422 некоректні поля |
 | GET `/{id}/voters` | Список допущених email (`limit`, `offset`) | |
 | POST `/{id}/voters` | Додати email: `{"emails": [...]}` | Лише чернетка; відповідь `{added, already_present, duplicates_in_request, invalid:[{value,reason}]}` |
 | DELETE `/{id}/voters/{voter_id}` | Прибрати виборця | 204; лише чернетка |
@@ -97,7 +96,7 @@ total_votes, eligible_voters, participants, turnout_percent`. Назви, що
 
 ## Журнал дій (AuditLog)
 
-Дії: `election.created|updated|deleted`, `candidate.added|updated|removed`,
+Дії: `election.created|updated|deleted`, `candidate.added|removed`,
 `voters.added`, `voter.removed`, `election.activated`, `election.closed`
 (`details.trigger`: `manual` | `timer` | `lazy`), `results.published|unpublished|exported`.
 Журнал **не містить** окремих голосів, email, фактів явки конкретних людей і
@@ -108,26 +107,24 @@ total_votes, eligible_voters, participants, turnout_percent`. Назви, що
 
 `GET /health` — процес живий; `GET /health/ready` — БД відповідає (503 інакше).
 
-## Google OAuth — `/api/auth`
+## Email/password — `/api/auth`
 
-- GET `/api/auth/google/login?next=<frontend URL>` → 303 до Google. `next`
-  перевіряється за FRONTEND_ORIGIN. Вхід використовує `openid email`.
-- GET `/api/auth/google/callback` перевіряє state cookie, обмінює одноразовий
-  code, перевіряє email_verified, sub і точний домен email. Google Workspace
-  не обов’язковий: особисті Google-акаунти з підтвердженою університетською
-  адресою також допускаються. Перший вхід створює
-  користувача; повторний використовує Google sub. Старий запис із тим самим
-  нормалізованим email прив’язується лише без конфліктів і за умови, що Google
-  авторитетний для цього домену (Workspace hd збігається або Gmail).
-- Успіх → 303 до frontend із сесійними cookies. Помилки → 303 на frontend
-  `/login?error=<code>`; код не містить сирих помилок Google або секретів.
-  Коди: access_denied, invalid_state, invalid_domain, unverified_email,
-  invalid_profile, oauth_failed, google_unavailable, auth_unavailable, account_conflict.
-  Без налаштованої адреси frontend → 503.
-- OAuth cookies мають строк 10 хвилин та видаляються після callback.
-  Відповіді мають Cache-Control: no-store і Referrer-Policy: no-referrer.
-- POST `/api/auth/login` — окремий mock-вхід тільки за ALLOW_MOCK_AUTH=true;
-  за замовчуванням увімкнений лише локально, у production заборонений.
+- POST `/api/auth/register`, тіло `{"email":"user@ukma.edu.ua","password":"…"}`:
+  приймає лише домен `@ukma.edu.ua`, створює роль `voter`, вимагає пароль не
+  коротший за 12 символів, зберігає лише Argon2id hash і одразу видає сесію.
+- POST `/api/auth/login`, тіло `{"email":"user@ukma.edu.ua","password":"…"}`:
+  перевіряє обліковий запис, повертає 200 з `user` та видає HttpOnly
+  `access_token`, opaque `refresh_token` і CSRF cookies. Невідомий email,
+  відсутній парольний hash і неправильний пароль мають однакову відповідь 401.
+- Лист не потребує підтвердження адміністратором. Email іншого домену → 400,
+  повторно зареєстрована адреса → 409.
+- Оператор також може створити або активувати користувача командою
+  `python -m app.cli.provision_user EMAIL [--role voter|admin]`; пароль вводиться
+  двічі через прихований prompt, має щонайменше 12 символів і зберігається лише
+  як Argon2id hash. Зіставлення email регістронезалежне. За замовчуванням команда
+  приймає лише `ALLOWED_EMAIL_DOMAIN`.
+- `/api/auth/me`, refresh, logout та CSRF bootstrap зберігають існуючий контракт
+  JWT/session cookies і CSRF. Токени не повертаються у JSON.
 
 
 ## Відомі розбіжності з ранніми чернетками
@@ -145,35 +142,5 @@ total_votes, eligible_voters, participants, turnout_percent`. Назви, що
   Response is no-store; supports access expiry and absent CSRF cookie.
 - Mutation requests include matching `X-CSRF-Token` and csrf_token cookie.
 - `POST /api/auth/refresh`: valid CSRF and refresh → new HttpOnly access cookie.
-- `POST /api/auth/logout`: exact allowed Origin, or matching CSRF when Origin is absent →
-  refresh revoked, session cookies deleted. Untrusted/null Origin is always rejected.
-  Trusted browser logout works even if refresh expired and `/csrf` returns 401.
+- `POST /api/auth/logout`: valid CSRF → refresh revoked, session cookies deleted.
 - Clients retry once after a successful refresh on 401; never refresh on 403.
-
-
-Session recovery distinguishes a CSRF mismatch (`detail: Missing or invalid CSRF token`)
-from an authorization 403. Fetch/Axios reload CSRF and retry that rejected mutation
-once; an ordinary forbidden action is never retried. Refresh also permits one CSRF
-repair; only 401 ends frontend identity, not a CSRF/origin 403 or network failure.
-Clearing the session invalidates pending frontend operations so late responses
-cannot refill the old token cache or replay requests under a later session.
-
-
-## Студентський frontend
-
-Frontend використовує студентські endpoints через спільну сесію, без тестових
-голосувань. `POST .../vote` очікує `{candidate_id}` і повертає `{status, message}`;
-час votedAt на клієнті не вигадується. `/vote/:id/done` підтверджує факт участі
-через has_voted, а `/vote/:id/results` показує лише опубліковані агрегати, отримані
-окремим запитом результатів. Студентська сторінка підсумків не вимагає whitelist
-і не звертається до endpoint деталей для перевірки доступу.
-
-
-PATCH кандидата не змінює ID. Пропущений `description` зберігається,
-`description: null` явно очищає його; `name: null` заборонено. Повтор запиту
-з уже збереженими значеннями не створює зайвих подій `candidate.updated`.
-У details аудиту редагування — лише candidate_id та назви змінених полів.
-
-Мітка path метрик Prometheus містить шаблон маршруту, а не URL з ID.
-Для невідомих маршрутів використовується `unmatched`, для невідомих HTTP-методів —
-`OTHER`, щоб випадкові запити не створювали необмежену кількість наборів метрик.
